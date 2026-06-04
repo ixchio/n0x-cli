@@ -27,6 +27,7 @@ import {
   formatSymbolIndex,
 } from './context/symbols.js';
 import type { EditMode } from './tools/types.js';
+import { createTerminalMarkdownStream, TerminalMarkdownStream } from 'markstream-cli';
 
 const VERSION = '0.1.0';
 
@@ -460,19 +461,50 @@ async function checkSandbox(config: Awaited<ReturnType<typeof loadConfig>>): Pro
 }
 
 function cliCallbacks(stream: boolean) {
+  let mdStream: TerminalMarkdownStream | null = null;
+
+  const ensureMdStream = () => {
+    if (!mdStream && stream) {
+      mdStream = createTerminalMarkdownStream({
+        loadingIndicator: { text: 'Thinking...' },
+        startOnNewLine: true
+      });
+      mdStream.start();
+    }
+    return mdStream;
+  };
+
+  const stopMdStream = () => {
+    if (mdStream) {
+      mdStream.stop();
+      mdStream = null;
+    }
+  };
+
   return {
-    onPlan: (p: string) => console.log(chalk.blue('\nPlan:\n') + p + '\n'),
+    onPlan: (p: string) => {
+      stopMdStream();
+      console.log(chalk.blue('\nPlan:\n') + p + '\n');
+    },
     onThought: (t: string) => {
+      stopMdStream();
       if (!stream) console.log(chalk.cyan(t));
     },
-    onToken: stream ? (t: string) => process.stdout.write(chalk.cyan(t)) : undefined,
-    onToolStart: (name: string, args: string) =>
-      console.log(chalk.magenta(`\n▸ ${name}`) + chalk.dim(` ${args}`)),
+    onToken: stream ? (t: string) => {
+      ensureMdStream()?.push(t);
+    } : undefined,
+    onToolStart: (name: string, args: string) => {
+      stopMdStream();
+      console.log(chalk.magenta(`\n▸ ${name}`) + chalk.dim(` ${args}`));
+    },
     onToolEnd: (name: string, out: string, err: boolean) => {
-      if (stream) process.stdout.write('\n');
+      stopMdStream();
       console.log(chalk[err ? 'red' : 'green'](`${name}: ${out}`));
     },
-    onWarning: (msg: string) => console.log(chalk.yellow(`\n⚠️  ${msg}\n`)),
+    onWarning: (msg: string) => {
+      stopMdStream();
+      console.log(chalk.yellow(`\n⚠️  ${msg}\n`));
+    },
   };
 }
 
