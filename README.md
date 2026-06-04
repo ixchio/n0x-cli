@@ -74,9 +74,7 @@ llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M
 
 ### 2. Install n0x
 ```bash
-git clone https://github.com/ixchio/n0x-cli.git
-cd n0x-cli
-npm install && npm run build && npm link
+npm install -g n0x-cli
 ```
 
 ### 3. Initialize your project
