@@ -148,14 +148,18 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
       for (const tc of response.tool_calls) {
         if (signal?.aborted) break;
 
+        const extractArgs = (raw: string): Record<string, unknown> => {
+          if (!raw) return {};
+          try { return JSON.parse(raw.trim()); } catch { /* ignore */ }
+          const match = raw.match(/\{[\s\S]*\}/);
+          if (match) { try { return JSON.parse(match[0]); } catch { /* ignore */ } }
+          const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (fence?.[1]) { try { return JSON.parse(fence[1]); } catch { /* ignore */ } }
+          return {};
+        };
+        const args = extractArgs(tc.function.arguments || '');
         const tool = getToolByName(tools, tc.function.name);
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>;
-        } catch {
-          args = {};
-        }
-
+        
         callbacks?.onToolStart?.(tc.function.name, JSON.stringify(args).slice(0, 160));
 
         const result = tool

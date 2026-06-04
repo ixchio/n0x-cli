@@ -156,6 +156,50 @@ export function createCli(): Command {
     });
 
   program
+    .command('commit')
+    .description('Generate a conventional commit message from staged changes')
+    .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .action(async (opts: { cwd: string }) => {
+      const { execSync } = await import('node:child_process');
+      const cwd = resolve(opts.cwd);
+      let diff = '';
+      try {
+        diff = execSync('git diff --staged', { cwd, encoding: 'utf8' }).trim();
+      } catch {
+        console.log(chalk.red('Not a git repository or git error.'));
+        return;
+      }
+      
+      if (!diff) {
+        console.log(chalk.yellow('Nothing staged. Run git add first.'));
+        return;
+      }
+      
+      const config = await loadConfig();
+      const llm = new LLMClient(config);
+      const messages = [
+        { role: 'system' as const, content: 'Write a conventional commit message for this diff. Output ONLY the message, one line, no backticks, no markdown.' },
+        { role: 'user' as const, content: `Diff:\n\n${diff.slice(0, 15000)}` },
+      ];
+      
+      console.log(chalk.dim('Generating commit message...'));
+      const res = await llm.chat(messages);
+      const msg = res.content?.trim().replace(/^[`"']|[`"']$/g, '') ?? '';
+      
+      if (!msg) {
+        console.log(chalk.red('Failed to generate commit message.'));
+        return;
+      }
+      
+      const { confirmAction } = await import('../lib/prompt.js');
+      console.log(`\nProposed commit message:\n${chalk.green.bold(msg)}\n`);
+      const confirm = await confirmAction('Apply this commit?');
+      if (confirm) {
+        execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, { cwd, stdio: 'inherit' });
+      }
+    });
+
+  program
     .command('fix')
     .description('Fix an error from a stack trace or message')
     .argument('<error>', 'Error text or path to log file')
