@@ -1,168 +1,134 @@
-# n0x-cli
+# n0x-cli 🌿
 
 [![CI](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml)
 
-Local-first terminal coding agent powered by **Bonsai** models only. No cloud LLM auth.
+> Look, here's the deal: cloud-based coding agents are cool, but sending your entire codebase to an API endpoint every time you want to fix a typo or refactor a module isn't always the move. You want privacy, speed, and zero latency. You want to run it on your own hardware. 
+
+**n0x-cli** is a local-first, zero-bullshit terminal coding agent. It is designed specifically and exclusively to run on **Bonsai** models. No OpenAI keys. No Anthropic limits. Just you, your machine, and a highly capable ReAct agent that loops through thoughts, acts on your codebase, and observes the results until the job is done.
 
 **Repository:** [github.com/ixchio/n0x-cli](https://github.com/ixchio/n0x-cli)
 
-```
-User goal → Plan → Gather context → Agent loop (Think → Tool → Observe) → Done
-```
+---
 
-## Features
+### Why n0x-cli?
 
-| Feature | Description |
+Because coding agents shouldn't be black boxes. n0x gives you absolute control over what the model sees and what it touches:
+- **Local compute**: Runs on `llama-server` with `prism-ml/Bonsai` models. Fast as hell.
+- **Smart Context**: It doesn't blindly stuff your whole repo into the context window. It surgically picks relevant files, uses `.n0xignore`, and tracks its own token budget.
+- **Trust via `n0x undo`**: The #1 reason people hate agents is they destroy files. `n0x` automatically backs up files to `~/.n0x/backups` before any edit, write, or patch. Plus, `--interactive` mode lets you confirm every diff. 
+- **Killer workflow features**: One-shot explanations (`n0x explain`), git-aware commit generation (`n0x commit`), and interactive REPLs (`n0x chat`).
+
+---
+
+## The Stack
+
+| Feature | What it actually does |
 |---------|-------------|
-| Agent loop | Think → Act → Observe → repeat until DONE |
-| File tools | Read, Write, Edit (exact match), Delete, Rename |
-| Terminal | Bash with safety denylist + optional Docker sandbox |
-| Search | ripgrep + glob |
-| Planning | Auto task breakdown before execution |
-| Context | Relevant files only (token savings) |
-| Memory | `~/.n0x/memory.json` |
-| Repo map | `n0x map` — framework, routes, deps |
-| MCP | `~/.n0x/mcp.json` — GitHub, filesystem, etc. |
-| Web search | [Tavily](https://www.tavily.com/) SDK — `WebSearch` + `WebExtract` |
-| Diff patches | `ApplyPatch` + unified diff preview |
-| Dry run | `--dry` previews changes; `--apply` writes |
-| Streaming | Token streaming from local LLM (on by default) |
-| Symbol index | `n0x init` → `.n0x/context.json` |
-| Git context | Auto-includes `git diff` in agent context |
-| `.n0xignore` | Exclude files from model context |
+| **Agent Loop** | Think → Act (use a tool) → Observe → Repeat until DONE. |
+| **File Ops** | Read, Write, Edit (fuzzy + AST-safe), Delete, Rename. |
+| **Terminal** | Bash execution with a safety denylist (no fork bombs) + Docker sandbox. |
+| **Search** | Superfast `ripgrep` + `glob` under the hood. |
+| **MCP** | Plug in `@modelcontextprotocol` servers for GitHub, DBs, etc. |
+| **Tavily Web** | SDK built-in for deep web searches when the agent gets stuck. |
 
-## Commands
+---
 
-| Command | Description |
-|---------|-------------|
-| `n0x run "goal"` | ReAct agent loop (max 20 steps) |
-| `n0x run --dry "goal"` | Preview diffs only |
-| `n0x explain src/foo.ts` | Explain a file |
-| `n0x fix "error text"` | Auto-patch from stack trace |
-| `n0x chat` | Interactive REPL |
-| `n0x init` | Config + symbol scan |
-| `n0x symbols` | Show symbol index |
-| `n0x models` | Bonsai model guide |
+## Commands You'll Actually Use
 
-## Model guide
+```bash
+n0x run "refactor the auth flow"  # The main agent loop (max 20 steps)
+n0x run "fix login" -i            # Interactive mode: confirm every single diff before it saves
+n0x commit                        # Reads staged files, writes a conventional commit, prompts to apply
+n0x explain src/utils.ts          # Fast, single-shot breakdown of what a file does
+n0x fix "error text"              # Auto-patch based on a stack trace
+n0x chat                          # Interactive REPL session
+n0x doctor                        # Pings your local LLM server and checks your environment
+n0x map                           # Generates a tree-map of your repo structure
+```
 
-| Task | Model |
+---
+
+## Model Guide
+
+Bonsai models punch way above their weight. Here's what we recommend:
+
+| Task | Model to use |
 |------|-------|
-| Fast edits | `bonsai-1.7b` / `prism-ml/Bonsai-1.7B-gguf:Q4_K_M` |
-| General agent (default) | `bonsai-4b` / `prism-ml/Bonsai-4B-gguf:Q4_K_M` |
-| Complex refactors | `bonsai-8b` / `prism-ml/Bonsai-8B-gguf:Q4_K_M` |
-| Apple Silicon | `prism-ml/Bonsai-8B-mlx-1bit` |
+| **Fast edits** | `prism-ml/Bonsai-1.7B-gguf:Q4_K_M` |
+| **Daily Driver (Default)** | `prism-ml/Bonsai-4B-gguf:Q4_K_M` |
+| **Complex Refactors** | `prism-ml/Bonsai-8B-gguf:Q4_K_M` |
+| **Apple Silicon (Macs)** | `prism-ml/Bonsai-8B-mlx-1bit` |
 
-Run `n0x models` for details.
+*Pro-tip: Run `n0x models` in your terminal for a full breakdown.*
 
-## Quick start
+---
 
-### 1. Start Bonsai
+## Quick Start (Get it running in 60s)
 
+### 1. Fire up Bonsai
+We recommend `llama-server`. Just let it run in the background.
 ```bash
 llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M
 ```
-
-Server: `http://localhost:8080/v1`
+*(Runs on `http://localhost:8080/v1`)*
 
 ### 2. Install n0x
-
 ```bash
 git clone https://github.com/ixchio/n0x-cli.git
 cd n0x-cli
-npm install
-npm run build
-npm link
+npm install && npm run build && npm link
 ```
 
-### 3. Initialize & verify
-
+### 3. Initialize your project
+Go to any codebase you want to work on:
 ```bash
-n0x init
-n0x doctor
+cd ~/my-project
+n0x init      # Builds symbol index, sets up .n0xignore
+n0x doctor    # Confirms LLM is reachable and models are loaded
 ```
 
-### 4. Run
-
+### 4. Let it rip
 ```bash
 n0x run "analyze this project and list entry points"
-n0x chat
-n0x map
 ```
 
-## Commands
+---
 
-| Command | Description |
-|---------|-------------|
-| `n0x run "<goal>"` | Run agent on a goal |
-| `n0x chat` | Interactive REPL |
-| `n0x doctor` | Check LLM, rg, Docker, config |
-| `n0x init` | Create `~/.n0x` config |
-| `n0x map` | Repository structure map |
-| `n0x memory` | View/set project memory |
-| `n0x config` | Show configuration |
+## Configuration
 
-## Config (`~/.n0x/config.toml`)
+Your global config lives in `~/.n0x/config.toml`. It looks something like this:
 
 ```toml
 default_model = "bonsai-4b"
 base_url = "http://localhost:8080/v1"
 api_key = "none"
-max_steps = 50
+max_steps = 20
 bash_timeout_ms = 120000
 llm_timeout_ms = 120000
-sandbox_docker = false
 
-# Tavily — https://www.tavily.com/
+# Tavily (Keyless mode by default, or bring your own API key)
 tavily_enabled = true
 tavily_search_depth = "advanced"
-tavily_extract_depth = "advanced"
-# tavily_api_key = "tvly-..."   # or: export TAVILY_API_KEY=tvly-...
 ```
 
-Free API key at [tavily.com](https://www.tavily.com/). Without a key, n0x uses Tavily **keyless mode** (shared rate limit).
+---
 
-## Models (Bonsai only)
+## Documentation
 
-| Alias | HuggingFace |
-|-------|-------------|
-| `bonsai-4b` | `prism-ml/Bonsai-4B-gguf:Q4_K_M` |
-| `bonsai-1.7b` | `prism-ml/Bonsai-1.7B-gguf:Q4_K_M` |
+Check out the `docs/` folder for deeper dives:
+- [**workflow.md**](./docs/workflow.md): How to actually use n0x effectively in your daily dev loop.
+- [**development.md**](./docs/development.md): How to hack on n0x itself.
+- [**changelog.md**](./docs/changelog.md): What's new.
 
-Apple Silicon (MLX):
+---
 
-```bash
-mlx_lm.server --model "prism-ml/Ternary-Bonsai-1.7B-mlx-2bit"
-```
+## Safety First
+- **Confined Paths**: Tools cannot escape the workspace via `../`.
+- **Bash Denylist**: Hardcoded rules block `rm -rf /`, fork bombs, etc.
+- **Docker Sandbox**: Optional containerized execution (`sandbox_docker = true`).
+- **Secret Redaction**: API keys are scrubbed from the agent logs.
+- **Backups**: Every file edit automatically backs up the old version to `~/.n0x/backups/`.
 
-## MCP (`~/.n0x/mcp.json`)
+---
 
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/your/project"]
-    }
-  }
-}
-```
-
-## Development
-
-```bash
-npm run dev -- run "hello"
-npm run check    # typecheck + lint + test
-npm run test
-```
-
-## Safety
-
-- Paths confined to workspace (no `../` escape)
-- Bash denylist blocks `rm -rf /`, fork bombs, etc.
-- Optional Docker sandbox (`sandbox_docker = true`)
-- Secrets redacted in logs
-
-## License
-
-MIT
+**License:** MIT
