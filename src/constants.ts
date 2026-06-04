@@ -10,23 +10,23 @@ export const DEFAULT_MAX_STEPS = 20;
 /** Approximate usable context (chars) per model — leave headroom for tools/output */
 export const MODEL_CONTEXT_CHARS: Record<string, number> = {
   'bonsai-1.7b': 6_000,
-  'prism-ml/Bonsai-1.7B-gguf:Q4_K_M': 6_000,
+  'prism-ml/Bonsai-1.7B-gguf:Bonsai-1.7B.gguf': 6_000,
   'prism-ml/Ternary-Bonsai-1.7B-mlx-2bit': 6_000,
   'bonsai-4b': 12_000,
-  'prism-ml/Bonsai-4B-gguf:Q4_K_M': 12_000,
+  'prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf': 12_000,
   'bonsai-8b': 20_000,
-  'prism-ml/Bonsai-8B-gguf:Q4_K_M': 20_000,
+  'prism-ml/Bonsai-8B-gguf:Bonsai-8B.gguf': 20_000,
   'prism-ml/Bonsai-8B-mlx-1bit': 20_000,
 };
 
 export const BONSAI_MODELS = [
   'bonsai-1.7b',
-  'prism-ml/Bonsai-1.7B-gguf:Q4_K_M',
+  'prism-ml/Bonsai-1.7B-gguf:Bonsai-1.7B.gguf',
   'prism-ml/Ternary-Bonsai-1.7B-mlx-2bit',
   'bonsai-4b',
-  'prism-ml/Bonsai-4B-gguf:Q4_K_M',
+  'prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf',
   'bonsai-8b',
-  'prism-ml/Bonsai-8B-gguf:Q4_K_M',
+  'prism-ml/Bonsai-8B-gguf:Bonsai-8B.gguf',
   'prism-ml/Bonsai-8B-mlx-1bit',
 ] as const;
 
@@ -41,21 +41,21 @@ export interface ModelRecommendation {
 export const MODEL_RECOMMENDATIONS: ModelRecommendation[] = [
   {
     id: 'bonsai-1.7b',
-    hf: 'prism-ml/Bonsai-1.7B-gguf:Q4_K_M',
+    hf: 'prism-ml/Bonsai-1.7B-gguf:Bonsai-1.7B.gguf',
     task: 'Fast autocomplete / small edits',
     why: 'Tiny, fast',
     ram: '~1 GB',
   },
   {
     id: 'bonsai-4b',
-    hf: 'prism-ml/Bonsai-4B-gguf:Q4_K_M',
+    hf: 'prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf',
     task: 'General coding agent (default)',
     why: 'Best balance',
     ram: '~0.6 GB',
   },
   {
     id: 'bonsai-8b',
-    hf: 'prism-ml/Bonsai-8B-gguf:Q4_K_M',
+    hf: 'prism-ml/Bonsai-8B-gguf:Bonsai-8B.gguf',
     task: 'Complex refactors',
     why: 'Stronger reasoning',
     ram: '~5–6 GB',

@@ -313,7 +313,7 @@ export function createCli(): Command {
       console.log(chalk.dim(`  Context: ${ctxPath}`));
       console.log(chalk.dim(`  Symbols: ${ctx.symbols.length} in ${ctx.fileCount} files`));
       console.log('\nStart Bonsai:');
-      console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M'));
+      console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf'));
       console.log('\nVerify:');
       console.log(chalk.cyan('  n0x doctor'));
     });
