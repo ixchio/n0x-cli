@@ -68,7 +68,7 @@ Bonsai models punch way above their weight. Here's what we recommend:
 ### 1. Fire up Bonsai
 We recommend `llama-server`. Just let it run in the background.
 ```bash
-llama-server -hf prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf
+llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf
 ```
 *(Runs on `http://localhost:8080/v1`)*
 
