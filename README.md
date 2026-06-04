@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml)
 
-> Look, here's the deal: cloud-based coding agents are cool, but sending your entire codebase to an API endpoint every time you want to fix a typo or refactor a module isn't always the move. You want privacy, speed, and zero latency. You want to run it on your own hardware. 
+> I just wanted to build my coffee shop website easily using Bonsai models. So I built this.
 
-**n0x-cli** is a local-first, zero-bullshit terminal coding agent. It is designed specifically and exclusively to run on **Bonsai** models. No OpenAI keys. No Anthropic limits. Just you, your machine, and a highly capable ReAct agent that loops through thoughts, acts on your codebase, and observes the results until the job is done.
+**n0x-cli** is a fast, local-first terminal coding agent designed specifically to run on **Bonsai** models. It skips the cloud API keys and limits so you can just spin up a local model and get straight to building your projects. It's an autonomous ReAct agent that loops through thoughts, acts on your codebase, and gets the job done.
 
 **Repository:** [github.com/ixchio/n0x-cli](https://github.com/ixchio/n0x-cli)
 
@@ -12,7 +12,7 @@
 
 ### Why n0x-cli?
 
-Because coding agents shouldn't be black boxes. n0x gives you absolute control over what the model sees and what it touches:
+Because it should be easy to build apps locally:
 - **Local compute**: Runs on `llama-server` with `prism-ml/Bonsai` models. Fast as hell.
 - **Smart Context**: It doesn't blindly stuff your whole repo into the context window. It surgically picks relevant files, uses `.n0xignore`, and tracks its own token budget.
 - **Trust via `n0x undo`**: The #1 reason people hate agents is they destroy files. `n0x` automatically backs up files to `~/.n0x/backups` before any edit, write, or patch. Plus, `--interactive` mode lets you confirm every diff. 
