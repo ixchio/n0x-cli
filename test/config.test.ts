@@ -18,7 +18,7 @@ describe('configSchema', () => {
 describe('LLMClient.isBonsaiModel', () => {
   it('accepts bonsai models', () => {
     expect(LLMClient.isBonsaiModel('bonsai-4b')).toBe(true);
-    expect(LLMClient.isBonsaiModel('prism-ml/Bonsai-4B-gguf:Q4_K_M')).toBe(true);
+    expect(LLMClient.isBonsaiModel('prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf')).toBe(true);
   });
 
   it('rejects non-bonsai', () => {

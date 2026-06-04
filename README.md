@@ -54,9 +54,9 @@ Bonsai models punch way above their weight. Here's what we recommend:
 
 | Task | Model to use |
 |------|-------|
-| **Fast edits** | `prism-ml/Bonsai-1.7B-gguf:Q4_K_M` |
-| **Daily Driver (Default)** | `prism-ml/Bonsai-4B-gguf:Q4_K_M` |
-| **Complex Refactors** | `prism-ml/Bonsai-8B-gguf:Q4_K_M` |
+| **Fast edits** | `prism-ml/Bonsai-1.7B-gguf:Bonsai-1.7B.gguf` |
+| **Daily Driver (Default)** | `prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf` |
+| **Complex Refactors** | `prism-ml/Bonsai-8B-gguf:Bonsai-8B.gguf` |
 | **Apple Silicon (Macs)** | `prism-ml/Bonsai-8B-mlx-1bit` |
 
 *Pro-tip: Run `n0x models` in your terminal for a full breakdown.*
@@ -68,7 +68,7 @@ Bonsai models punch way above their weight. Here's what we recommend:
 ### 1. Fire up Bonsai
 We recommend `llama-server`. Just let it run in the background.
 ```bash
-llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M
+llama-server -hf prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf
 ```
 *(Runs on `http://localhost:8080/v1`)*
 
