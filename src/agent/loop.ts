@@ -111,6 +111,24 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
 
       const response = await llm.chat(messages, toolDefinitions(tools), onToken);
 
+      // Fallback: extract raw JSON tool calls from content if llama-server didn't parse them natively
+      if (response.content && response.tool_calls.length === 0) {
+        const rawCalls = Array.from(response.content.matchAll(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}/g));
+        if (rawCalls.length > 0) {
+          for (const match of rawCalls) {
+            try {
+              const tc = JSON.parse(match[0]);
+              response.tool_calls.push({
+                id: `call_${Math.random().toString(36).substring(7)}`,
+                type: 'function',
+                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+              });
+            } catch { /* ignore */ }
+          }
+          response.content = response.content.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}[\s\S]*?(?:<\/tool_call>)?/g, '').trim();
+        }
+      }
+
       if (response.tool_calls.length === 0) {
         if (response.content) {
           callbacks?.onThought?.(response.content);
