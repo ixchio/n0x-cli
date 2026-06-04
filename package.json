@@ -1,6 +1,6 @@
 {
   "name": "n0x-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "n0x-cli — local-first terminal coding agent powered by Bonsai",
   "type": "module",
   "bin": {
