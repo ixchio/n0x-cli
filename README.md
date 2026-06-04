@@ -1,6 +1,10 @@
-# n0x
+# n0x-cli
+
+[![CI](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml)
 
 Local-first terminal coding agent powered by **Bonsai** models only. No cloud LLM auth.
+
+**Repository:** [github.com/ixchio/n0x-cli](https://github.com/ixchio/n0x-cli)
 
 ```
 User goal → Plan → Gather context → Agent loop (Think → Tool → Observe) → Done
