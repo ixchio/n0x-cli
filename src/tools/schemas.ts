@@ -17,6 +17,11 @@ export const editArgs = z.object({
   new_string: z.string(),
 });
 
+export const patchArgs = z.object({
+  path: z.string().min(1),
+  patch: z.string().min(1).describe('Unified diff patch'),
+});
+
 export const deleteArgs = z.object({
   path: z.string().min(1),
 });
@@ -38,6 +43,11 @@ export const grepArgs = z.object({
 
 export const globArgs = z.object({
   pattern: z.string().min(1),
+});
+
+export const searchDirArgs = z.object({
+  pattern: z.string().min(1).max(500),
+  path: z.string().default('.'),
 });
 
 export const webSearchArgs = z.object({

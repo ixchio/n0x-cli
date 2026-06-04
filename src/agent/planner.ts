@@ -61,7 +61,9 @@ Example: ["Analyze project","Implement feature","Run tests"]`,
     });
   }
   const fallback = FALLBACK_PLAN(goal);
-  fallback[0].status = 'in_progress';
+  if (fallback[0]) {
+    fallback[0].status = 'in_progress';
+  }
   return fallback;
 }
 

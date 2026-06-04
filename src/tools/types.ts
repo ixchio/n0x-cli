@@ -1,11 +1,15 @@
 import type { ZodType } from 'zod';
 import type { N0xConfig } from '../config/schema.js';
 
+export type EditMode = 'apply' | 'dry' | 'interactive';
+
 export interface ToolContext {
   cwd: string;
   config: N0xConfig;
   sandboxDocker: boolean;
   sandboxImage: string;
+  /** dry = preview diffs only; apply = write to disk */
+  editMode: EditMode;
 }
 
 export interface ToolResult {

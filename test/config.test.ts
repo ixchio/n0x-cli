@@ -7,7 +7,7 @@ describe('configSchema', () => {
     const cfg = configSchema.parse({});
     expect(cfg.default_model).toBe('bonsai-4b');
     expect(cfg.base_url).toBe('http://localhost:8080/v1');
-    expect(cfg.max_steps).toBe(50);
+    expect(cfg.max_steps).toBe(20);
   });
 
   it('rejects invalid max_steps', () => {
@@ -18,7 +18,7 @@ describe('configSchema', () => {
 describe('LLMClient.isBonsaiModel', () => {
   it('accepts bonsai models', () => {
     expect(LLMClient.isBonsaiModel('bonsai-4b')).toBe(true);
-    expect(LLMClient.isBonsaiModel('prism-ml/Bonsai-4B-gguf:Q1_0')).toBe(true);
+    expect(LLMClient.isBonsaiModel('prism-ml/Bonsai-4B-gguf:Q4_K_M')).toBe(true);
   });
 
   it('rejects non-bonsai', () => {
