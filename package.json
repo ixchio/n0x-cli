@@ -1,7 +1,7 @@
 {
-  "name": "@n0x/n0x",
+  "name": "n0x-cli",
   "version": "0.1.0",
-  "description": "n0x — local-first terminal coding agent powered by Bonsai",
+  "description": "n0x-cli — local-first terminal coding agent powered by Bonsai",
   "type": "module",
   "bin": {
     "n0x": "dist/index.js"

@@ -34,7 +34,7 @@ export async function ensureN0xHome(): Promise<string> {
 }
 
 const CONFIG_TEMPLATE = `# n0x — local-first coding agent (Bonsai only)
-# Docs: https://github.com/n0x-code/n0x
+# Docs: https://github.com/ixchio/n0x-cli
 
 default_provider = "local"
 default_model = "bonsai-4b"
