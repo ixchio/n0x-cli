@@ -115,7 +115,7 @@ export class LLMClient {
       throw new N0xError(
         'LLM_UNAVAILABLE',
         `Cannot reach Bonsai at ${this.config.base_url}`,
-        `Run: llama-server -hf prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf\n(${e instanceof Error ? e.message : String(e)})`,
+        `Run: llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf\n(${e instanceof Error ? e.message : String(e)})`,
       );
     } finally {
       clearTimeout(timeout);
