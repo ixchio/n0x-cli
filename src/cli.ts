@@ -191,7 +191,7 @@ export function createCli(): Command {
         return;
       }
       
-      const { confirmAction } = await import('../lib/prompt.js');
+      const { confirmAction } = await import('./lib/prompt.js');
       console.log(`\nProposed commit message:\n${chalk.green.bold(msg)}\n`);
       const confirm = await confirmAction('Apply this commit?');
       if (confirm) {
