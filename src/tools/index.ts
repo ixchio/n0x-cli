@@ -6,9 +6,11 @@ import { writeTool } from './write.js';
 import { deleteTool } from './delete.js';
 import { renameTool } from './rename.js';
 import { editTool } from './edit.js';
+import { patchTool } from './patch.js';
 import { bashTool } from './bash.js';
 import { grepTool } from './grep.js';
 import { globTool } from './glob.js';
+import { searchDirTool } from './search-dir.js';
 import { createWebSearchTool } from './web-search.js';
 import { createWebExtractTool } from './web-extract.js';
 import { isN0xError, formatError } from '../lib/errors.js';
@@ -19,11 +21,13 @@ const CORE_TOOLS: Tool[] = [
   readTool,
   writeTool,
   editTool,
+  patchTool,
   deleteTool,
   renameTool,
   bashTool,
   grepTool,
   globTool,
+  searchDirTool,
 ];
 
 export function buildTools(config: N0xConfig): Tool[] {
@@ -35,12 +39,17 @@ export function buildTools(config: N0xConfig): Tool[] {
   return tools;
 }
 
-export function toolContext(config: N0xConfig, cwd: string): ToolContext {
+export function toolContext(
+  config: N0xConfig,
+  cwd: string,
+  editMode: ToolContext['editMode'] = 'apply',
+): ToolContext {
   return {
     cwd,
     config,
     sandboxDocker: config.sandbox_docker,
     sandboxImage: config.sandbox_image,
+    editMode,
   };
 }
 

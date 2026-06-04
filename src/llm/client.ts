@@ -15,8 +15,12 @@ export class LLMClient {
     private signal?: AbortSignal,
   ) {}
 
-  async chat(messages: ChatMessage[], tools?: ToolDef[]): Promise<LLMResponse> {
-    return withRetry(() => this.chatOnce(messages, tools), {
+  async chat(
+    messages: ChatMessage[],
+    tools?: ToolDef[],
+    onToken?: (token: string) => void,
+  ): Promise<LLMResponse> {
+    return withRetry(() => this.chatOnce(messages, tools, onToken), {
       maxAttempts: 3,
       shouldRetry: (e) => {
         if (this.signal?.aborted) return false;
@@ -28,12 +32,18 @@ export class LLMClient {
     });
   }
 
-  private async chatOnce(messages: ChatMessage[], tools?: ToolDef[]): Promise<LLMResponse> {
+  private async chatOnce(
+    messages: ChatMessage[],
+    tools?: ToolDef[],
+    onToken?: (token: string) => void,
+  ): Promise<LLMResponse> {
+    const useStream = Boolean(onToken && this.config.stream_output);
     const body: Record<string, unknown> = {
       model: this.config.default_model,
       messages: serializeMessages(messages),
       temperature: 0.5,
       top_p: 0.9,
+      stream: useStream,
     };
     if (tools?.length) {
       body.tools = tools;
@@ -61,8 +71,12 @@ export class LLMClient {
         throw new N0xError(
           'LLM_REQUEST_FAILED',
           `LLM request failed (${res.status}): ${text.slice(0, 500)}`,
-          'Start Bonsai: llama-server -hf prism-ml/Bonsai-4B-gguf:Q1_0',
+          'Start Bonsai: llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M',
         );
+      }
+
+      if (useStream && res.body) {
+        return await this.parseStreamResponse(res.body, onToken!);
       }
 
       const data = (await res.json()) as {
@@ -100,13 +114,86 @@ export class LLMClient {
       }
       throw new N0xError(
         'LLM_UNAVAILABLE',
-        e instanceof Error ? e.message : String(e),
-        `Cannot reach ${this.config.base_url}`,
+        `Cannot reach Bonsai at ${this.config.base_url}`,
+        `Run: llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M\n(${e instanceof Error ? e.message : String(e)})`,
       );
     } finally {
       clearTimeout(timeout);
       this.signal?.removeEventListener('abort', onAbort);
     }
+  }
+
+  private async parseStreamResponse(
+    body: ReadableStream<Uint8Array>,
+    onToken: (token: string) => void,
+  ): Promise<LLMResponse> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let content = '';
+    const toolCalls: LLMResponse['tool_calls'] = [];
+    let finish_reason = 'stop';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(data) as {
+            choices?: Array<{
+              delta?: {
+                content?: string;
+                tool_calls?: Array<{
+                  index?: number;
+                  id?: string;
+                  function?: { name?: string; arguments?: string };
+                }>;
+              };
+              finish_reason?: string | null;
+            }>;
+          };
+          const choice = parsed.choices?.[0];
+          if (choice?.finish_reason) finish_reason = choice.finish_reason;
+          const delta = choice?.delta;
+          if (delta?.content) {
+            content += delta.content;
+            onToken(delta.content);
+          }
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              if (!toolCalls[idx]) {
+                toolCalls[idx] = {
+                  id: tc.id ?? `call_${idx}`,
+                  type: 'function',
+                  function: { name: '', arguments: '' },
+                };
+              }
+              if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
+              if (tc.function?.arguments) {
+                toolCalls[idx].function.arguments += tc.function.arguments;
+              }
+            }
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    }
+
+    return {
+      content: content || null,
+      tool_calls: toolCalls.filter(Boolean),
+      finish_reason,
+    };
   }
 
   static isBonsaiModel(model: string): boolean {

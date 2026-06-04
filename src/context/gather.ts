@@ -1,38 +1,31 @@
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join, extname, relative } from 'node:path';
+import { loadN0xIgnore, isIgnored } from './n0xignore.js';
+import { fileBudget } from './chunk.js';
+import { loadChunksForFiles } from './chunk.js';
 
 const CODE_EXT = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java',
   '.json', '.toml', '.yaml', '.yml', '.md', '.css', '.html',
 ]);
 
-const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.n0x',
-]);
-
-export interface GatheredFile {
-  path: string;
-  content: string;
-  score: number;
-}
-
-async function walk(dir: string, root: string, files: string[]): Promise<void> {
+async function walk(dir: string, root: string, ignore: string[], files: string[]): Promise<void> {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
-    if (SKIP_DIRS.has(e.name)) continue;
+    const rel = relative(root, join(dir, e.name));
+    if (isIgnored(rel, ignore)) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      await walk(full, root, files);
+      await walk(full, root, ignore, files);
     } else if (CODE_EXT.has(extname(e.name))) {
       const st = await stat(full);
-      if (st.size < 100_000) files.push(relative(root, full));
+      if (st.size < 100_000) files.push(rel);
     }
   }
 }
 
 function scoreFile(path: string, goal: string): number {
-  const lower = goal.toLowerCase();
-  const words = lower.split(/\W+/).filter((w) => w.length > 3);
+  const words = goal.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
   let score = 0;
   const p = path.toLowerCase();
   for (const w of words) {
@@ -47,30 +40,17 @@ export async function gatherRelevantFiles(
   cwd: string,
   goal: string,
   maxFiles = 8,
-  maxChars = 24_000,
+  maxChars?: number,
 ): Promise<string> {
+  const ignore = await loadN0xIgnore(cwd);
   const all: string[] = [];
-  await walk(cwd, cwd, all);
+  await walk(cwd, cwd, ignore, all);
   const ranked = all
     .map((path) => ({ path, score: scoreFile(path, goal) }))
     .sort((a, b) => b.score - a.score)
-    .slice(0, maxFiles);
+    .slice(0, maxFiles)
+    .map((x) => x.path);
 
-  const gathered: GatheredFile[] = [];
-  let total = 0;
-  for (const { path, score } of ranked) {
-    if (total >= maxChars) break;
-    try {
-      const content = await readFile(join(cwd, path), 'utf8');
-      const slice = content.slice(0, Math.min(4000, maxChars - total));
-      gathered.push({ path, content: slice, score });
-      total += slice.length;
-    } catch {
-      /* skip unreadable */
-    }
-  }
-
-  return gathered
-    .map((f) => `--- ${f.path} ---\n${f.content}`)
-    .join('\n\n');
+  const budget = maxChars ?? fileBudget('bonsai-4b');
+  return loadChunksForFiles(cwd, ranked, budget);
 }

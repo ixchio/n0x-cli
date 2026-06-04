@@ -24,13 +24,43 @@ User goal → Plan → Gather context → Agent loop (Think → Tool → Observe
 | Repo map | `n0x map` — framework, routes, deps |
 | MCP | `~/.n0x/mcp.json` — GitHub, filesystem, etc. |
 | Web search | [Tavily](https://www.tavily.com/) SDK — `WebSearch` + `WebExtract` |
+| Diff patches | `ApplyPatch` + unified diff preview |
+| Dry run | `--dry` previews changes; `--apply` writes |
+| Streaming | Token streaming from local LLM (on by default) |
+| Symbol index | `n0x init` → `.n0x/context.json` |
+| Git context | Auto-includes `git diff` in agent context |
+| `.n0xignore` | Exclude files from model context |
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `n0x run "goal"` | ReAct agent loop (max 20 steps) |
+| `n0x run --dry "goal"` | Preview diffs only |
+| `n0x explain src/foo.ts` | Explain a file |
+| `n0x fix "error text"` | Auto-patch from stack trace |
+| `n0x chat` | Interactive REPL |
+| `n0x init` | Config + symbol scan |
+| `n0x symbols` | Show symbol index |
+| `n0x models` | Bonsai model guide |
+
+## Model guide
+
+| Task | Model |
+|------|-------|
+| Fast edits | `bonsai-1.7b` / `prism-ml/Bonsai-1.7B-gguf:Q4_K_M` |
+| General agent (default) | `bonsai-4b` / `prism-ml/Bonsai-4B-gguf:Q4_K_M` |
+| Complex refactors | `bonsai-8b` / `prism-ml/Bonsai-8B-gguf:Q4_K_M` |
+| Apple Silicon | `prism-ml/Bonsai-8B-mlx-1bit` |
+
+Run `n0x models` for details.
 
 ## Quick start
 
 ### 1. Start Bonsai
 
 ```bash
-llama-server -hf prism-ml/Bonsai-4B-gguf:Q1_0
+llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M
 ```
 
 Server: `http://localhost:8080/v1`
@@ -96,8 +126,8 @@ Free API key at [tavily.com](https://www.tavily.com/). Without a key, n0x uses T
 
 | Alias | HuggingFace |
 |-------|-------------|
-| `bonsai-4b` | `prism-ml/Bonsai-4B-gguf:Q1_0` |
-| `bonsai-1.7b` | `prism-ml/Bonsai-1.7B-gguf:Q1_0` |
+| `bonsai-4b` | `prism-ml/Bonsai-4B-gguf:Q4_K_M` |
+| `bonsai-1.7b` | `prism-ml/Bonsai-1.7B-gguf:Q4_K_M` |
 
 Apple Silicon (MLX):
 

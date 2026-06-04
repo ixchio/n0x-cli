@@ -40,9 +40,11 @@ default_provider = "local"
 default_model = "bonsai-4b"
 base_url = "http://localhost:8080/v1"
 api_key = "none"
-max_steps = 50
+max_steps = 20
 bash_timeout_ms = 120000
 llm_timeout_ms = 120000
+git_context = true
+stream_output = true
 sandbox_docker = false
 sandbox_image = "node:22-alpine"
 

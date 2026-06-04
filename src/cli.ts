@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { resolve } from 'node:path';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import {
   loadConfig,
   writeDefaultConfig,
@@ -15,11 +15,18 @@ import { checkLlmHealth } from './llm/health.js';
 import { analyzeRepository, formatRepoMap } from './repo/analyze.js';
 import { loadMemory, saveMemory } from './agent/memory.js';
 import { memorySchema } from './config/schema.js';
-import { PRODUCT_NAME, BONSAI_MODELS } from './constants.js';
+import { PRODUCT_NAME, BONSAI_MODELS, MODEL_RECOMMENDATIONS } from './constants.js';
 import { isDockerAvailable } from './sandbox/docker.js';
 import { formatError, isN0xError } from './lib/errors.js';
 import { setLogLevel } from './lib/logger.js';
 import { spawn } from 'node:child_process';
+import {
+  buildSymbolIndex,
+  saveProjectContext,
+  loadProjectContext,
+  formatSymbolIndex,
+} from './context/symbols.js';
+import type { EditMode } from './tools/types.js';
 
 const VERSION = '0.1.0';
 
@@ -36,6 +43,46 @@ async function assertWorkspace(cwd: string): Promise<void> {
   await access(cwd);
 }
 
+async function runAgentCommand(opts: {
+  goal: string;
+  cwd: string;
+  maxSteps?: number;
+  dry?: boolean;
+  apply?: boolean;
+  interactive?: boolean;
+  stream?: boolean;
+}): Promise<void> {
+  const config = await loadConfig();
+  validateBonsai(config.default_model);
+
+  const cwd = resolve(opts.cwd);
+  await assertWorkspace(cwd);
+  if (opts.maxSteps) config.max_steps = opts.maxSteps;
+  if (opts.stream === false) config.stream_output = false;
+
+  let editMode: EditMode = 'apply';
+  if (opts.dry) editMode = 'dry';
+  else if (opts.interactive) editMode = 'interactive';
+  else if (opts.apply) editMode = 'apply';
+
+  await printBanner(config, cwd, opts.goal, editMode);
+  await checkSandbox(config);
+
+  const ac = createAbortController();
+  const result = await runAgent({
+    goal: opts.goal.trim(),
+    cwd,
+    config,
+    signal: ac.signal,
+    editMode,
+    stream: config.stream_output,
+    callbacks: cliCallbacks(config.stream_output),
+  });
+
+  printResult(result);
+  process.exit(result.completed ? 0 : 1);
+}
+
 export function createCli(): Command {
   const program = new Command();
 
@@ -45,54 +92,98 @@ export function createCli(): Command {
     .version(VERSION)
     .option('-v, --verbose', 'Debug logging')
     .hook('preAction', (thisCommand) => {
-      if (thisCommand.opts().verbose) setLogLevel('debug');
+      const opts = thisCommand.opts() as { verbose?: boolean };
+      if (opts.verbose) setLogLevel('debug');
     });
 
   program
     .command('run')
-    .description('Run the agent on a goal')
+    .description('Run the agent on a goal (ReAct loop)')
     .argument('[goal]', 'What to build or fix')
     .option('-p, --prompt <text>', 'Goal prompt')
     .option('-C, --cwd <dir>', 'Working directory', process.cwd())
-    .option('--max-steps <n>', 'Override max agent steps', (v) => parseInt(v, 10))
+    .option('--max-steps <n>', 'Max iterations (default 20)', (v) => parseInt(v, 10))
+    .option('--dry', 'Preview diffs only — do not write files')
+    .option('--apply', 'Write changes to disk (default)')
+    .option('-i, --interactive', 'Confirm each file write interactively')
+    .option('--no-stream', 'Disable streaming tokens')
     .action(async (goal: string | undefined, opts: {
       prompt?: string;
       cwd: string;
       maxSteps?: number;
+      dry?: boolean;
+      apply?: boolean;
+      interactive?: boolean;
+      noStream?: boolean;
     }) => {
-      const config = await loadConfig();
-      validateBonsai(config.default_model);
-
       const userGoal = opts.prompt ?? goal;
-      if (!userGoal?.trim()) {
-        throw new Error('Provide a goal: n0x run "fix the login bug"');
-      }
-
-      const cwd = resolve(opts.cwd);
-      await assertWorkspace(cwd);
-      if (opts.maxSteps) config.max_steps = opts.maxSteps;
-
-      await printBanner(config, cwd, userGoal);
-      await checkSandbox(config);
-
-      const ac = createAbortController();
-      const result = await runAgent({
-        goal: userGoal.trim(),
-        cwd,
-        config,
-        signal: ac.signal,
-        callbacks: cliCallbacks(),
+      if (!userGoal?.trim()) throw new Error('Provide a goal: n0x run "fix the login bug"');
+      await runAgentCommand({
+        goal: userGoal,
+        cwd: opts.cwd,
+        maxSteps: opts.maxSteps,
+        dry: opts.dry,
+        apply: opts.apply,
+        interactive: opts.interactive,
+        stream: opts.noStream ? false : undefined,
       });
+    });
 
-      printResult(result);
-      process.exit(result.completed ? 0 : 1);
+  program
+    .command('explain')
+    .description('Explain what a file does')
+    .argument('<file>', 'File path')
+    .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .option('--no-stream', 'Disable streaming')
+    .action(async (file: string, opts: { cwd: string; noStream?: boolean }) => {
+      const content = await readFile(resolve(opts.cwd, file), 'utf8').catch(() => null);
+      if (!content) throw new Error(`Cannot read file: ${file}`);
+      const config = await loadConfig();
+      const llm = new LLMClient(config);
+      const messages = [
+        { role: 'system' as const, content: 'You are an expert programmer. Explain what the provided file does concisely and structurally. Do not output code unless necessary.' },
+        { role: 'user' as const, content: `File: ${file}\n\n${content.slice(0, 8000)}` },
+      ];
+      
+      console.log(chalk.bold.green(`\n🌿 ${PRODUCT_NAME} explain: ${file}\n`));
+      const onToken = opts.noStream ? undefined : (t: string) => process.stdout.write(chalk.cyan(t));
+      const res = await llm.chat(messages, undefined, onToken);
+      
+      if (opts.noStream && res.content) {
+        console.log(chalk.cyan(res.content));
+      }
+      console.log();
+    });
+
+  program
+    .command('fix')
+    .description('Fix an error from a stack trace or message')
+    .argument('<error>', 'Error text or path to log file')
+    .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .option('--dry', 'Preview fixes only')
+    .option('--apply', 'Apply fixes')
+    .action(async (errorArg: string, opts: { cwd: string; dry?: boolean; apply?: boolean }) => {
+      let errorText = errorArg;
+      try {
+        const maybeFile = await readFile(resolve(opts.cwd, errorArg), 'utf8');
+        errorText = maybeFile;
+      } catch {
+        /* use arg as literal error */
+      }
+      await runAgentCommand({
+        goal: `Fix this error in the codebase. Read relevant files, patch, run tests.\n\nError:\n${errorText.slice(0, 6000)}`,
+        cwd: opts.cwd,
+        dry: opts.dry,
+        apply: opts.apply ?? !opts.dry,
+      });
     });
 
   program
     .command('chat')
     .description('Interactive REPL')
     .option('-C, --cwd <dir>', 'Working directory', process.cwd())
-    .action(async (opts: { cwd: string }) => {
+    .option('--dry', 'Preview edits only')
+    .action(async (opts: { cwd: string; dry?: boolean }) => {
       const config = await loadConfig();
       validateBonsai(config.default_model);
       const cwd = resolve(opts.cwd);
@@ -102,7 +193,7 @@ export function createCli(): Command {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
 
       console.log(chalk.bold.green(`\n🌿 ${PRODUCT_NAME} interactive`));
-      console.log(chalk.dim(`Model: ${config.default_model} | exit to quit\n`));
+      console.log(chalk.dim(`Model: ${config.default_model} | ${opts.dry ? 'DRY' : 'APPLY'} | exit to quit\n`));
 
       const prompt = (): void => {
         rl.question(chalk.cyan('you> '), async (line) => {
@@ -117,7 +208,8 @@ export function createCli(): Command {
             cwd,
             config,
             signal: ac.signal,
-            callbacks: cliCallbacks(),
+            editMode: opts.dry ? 'dry' : 'apply',
+            callbacks: cliCallbacks(config.stream_output),
           });
           printResult(result);
           console.log();
@@ -129,8 +221,10 @@ export function createCli(): Command {
 
   program
     .command('init')
-    .description('Create ~/.n0x config and example MCP file')
-    .action(async () => {
+    .description('Create config, scan repo, build symbol index → .n0x/context.json')
+    .option('-C, --cwd <dir>', 'Project directory', process.cwd())
+    .action(async (opts: { cwd: string }) => {
+      const cwd = resolve(opts.cwd);
       await writeDefaultConfig();
       const { writeFile, mkdir } = await import('node:fs/promises');
       const { existsSync } = await import('node:fs');
@@ -145,7 +239,7 @@ export function createCli(): Command {
               mcpServers: {
                 filesystem: {
                   command: 'npx',
-                  args: ['-y', '@modelcontextprotocol/server-filesystem', process.cwd()],
+                  args: ['-y', '@modelcontextprotocol/server-filesystem', cwd],
                 },
               },
             },
@@ -156,13 +250,42 @@ export function createCli(): Command {
         );
       }
 
+      const n0xignorePath = resolve(cwd, '.n0xignore');
+      if (!existsSync(n0xignorePath)) {
+        await writeFile(
+          n0xignorePath,
+          '# Files never sent to the model\nnode_modules/\ndist/\n.git/\n*.min.js\n',
+          'utf8',
+        );
+      }
+
+      console.log(chalk.dim('Scanning repository for symbols...'));
+      const ctx = await buildSymbolIndex(cwd);
+      const ctxPath = await saveProjectContext(cwd, ctx);
+
       console.log(chalk.green('n0x initialized'));
-      console.log(chalk.dim(`  Config: ${configPath()}`));
-      console.log(chalk.dim(`  MCP:    ${mcpPath}`));
+      console.log(chalk.dim(`  Config:  ${configPath()}`));
+      console.log(chalk.dim(`  MCP:     ${mcpPath}`));
+      console.log(chalk.dim(`  Context: ${ctxPath}`));
+      console.log(chalk.dim(`  Symbols: ${ctx.symbols.length} in ${ctx.fileCount} files`));
       console.log('\nStart Bonsai:');
-      console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf:Q1_0'));
+      console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf:Q4_K_M'));
       console.log('\nVerify:');
       console.log(chalk.cyan('  n0x doctor'));
+    });
+
+  program
+    .command('models')
+    .description('Bonsai model recommendations')
+    .action(() => {
+      console.log(chalk.bold('\nBonsai model guide\n'));
+      for (const m of MODEL_RECOMMENDATIONS) {
+        console.log(chalk.cyan(m.id));
+        console.log(`  Task: ${m.task}`);
+        console.log(`  HF:   ${m.hf}`);
+        console.log(`  RAM:  ${m.ram}`);
+        console.log(`  Why:  ${m.why}\n`);
+      }
     });
 
   program
@@ -172,12 +295,7 @@ export function createCli(): Command {
       const config = await loadConfig();
       const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
 
-      checks.push({
-        name: 'Config',
-        ok: true,
-        detail: configPath(),
-      });
-
+      checks.push({ name: 'Config', ok: true, detail: configPath() });
       checks.push({
         name: 'Bonsai model',
         ok: LLMClient.isBonsaiModel(config.default_model),
@@ -189,15 +307,14 @@ export function createCli(): Command {
         name: 'LLM server',
         ok: health.ok,
         detail: health.ok
-          ? `${config.base_url} (${health.latencyMs}ms, models: ${health.models?.slice(0, 3).join(', ') ?? 'n/a'})`
+          ? `${config.base_url} (${health.latencyMs}ms) - Models: ${health.models?.join(', ') || 'none'}`
           : (health.error ?? 'unreachable'),
       });
 
-      const rgOk = await commandExists('rg');
       checks.push({
         name: 'ripgrep',
-        ok: rgOk,
-        detail: rgOk ? 'installed' : 'missing — apt install ripgrep',
+        ok: await commandExists('rg'),
+        detail: (await commandExists('rg')) ? 'installed' : 'missing',
       });
 
       if (config.sandbox_docker) {
@@ -209,24 +326,16 @@ export function createCli(): Command {
         });
       }
 
-      const hasTavilyKey = Boolean(
-        config.tavily_api_key?.trim() || process.env.TAVILY_API_KEY?.trim(),
-      );
       checks.push({
-        name: 'Tavily web tools',
+        name: 'Tavily',
         ok: config.tavily_enabled,
-        detail: config.tavily_enabled
-          ? hasTavilyKey
-            ? 'enabled (API key set) — WebSearch + WebExtract'
-            : 'enabled (keyless mode) — get key at https://tavily.com'
-          : 'disabled in config',
+        detail: config.tavily_enabled ? 'WebSearch + WebExtract' : 'disabled',
       });
 
       console.log(chalk.bold(`\n🌿 ${PRODUCT_NAME} doctor\n`));
       let allOk = true;
       for (const c of checks) {
-        const icon = c.ok ? chalk.green('✓') : chalk.red('✗');
-        console.log(`${icon} ${c.name}: ${c.detail}`);
+        console.log(`${c.ok ? chalk.green('✓') : chalk.red('✗')} ${c.name}: ${c.detail}`);
         if (!c.ok) allOk = false;
       }
       console.log();
@@ -235,11 +344,23 @@ export function createCli(): Command {
 
   program
     .command('map')
-    .description('Generate repository map')
+    .description('Repository map')
     .option('-C, --cwd <dir>', 'Working directory', process.cwd())
     .action(async (opts: { cwd: string }) => {
-      const map = await analyzeRepository(resolve(opts.cwd));
-      console.log(formatRepoMap(map));
+      console.log(formatRepoMap(await analyzeRepository(resolve(opts.cwd))));
+    });
+
+  program
+    .command('symbols')
+    .description('Show symbol index from .n0x/context.json')
+    .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .action(async (opts: { cwd: string }) => {
+      const ctx = await loadProjectContext(resolve(opts.cwd));
+      if (!ctx) {
+        console.log('No symbol index. Run: n0x init');
+        process.exit(1);
+      }
+      console.log(formatSymbolIndex(ctx));
     });
 
   program
@@ -248,8 +369,7 @@ export function createCli(): Command {
     .option('--set <json>', 'Set memory JSON')
     .action(async (opts: { set?: string }) => {
       if (opts.set) {
-        const mem = memorySchema.parse(JSON.parse(opts.set));
-        await saveMemory(mem);
+        await saveMemory(memorySchema.parse(JSON.parse(opts.set)));
         console.log('Memory saved.');
       } else {
         console.log(JSON.stringify(await loadMemory(), null, 2));
@@ -258,11 +378,10 @@ export function createCli(): Command {
 
   program
     .command('config')
-    .description('Show config path and values')
+    .description('Show config')
     .action(async () => {
-      const config = await loadConfig();
       console.log(configPath());
-      console.log(JSON.stringify(config, null, 2));
+      console.log(JSON.stringify(await loadConfig(), null, 2));
     });
 
   return program;
@@ -280,32 +399,36 @@ async function printBanner(
   config: Awaited<ReturnType<typeof loadConfig>>,
   cwd: string,
   goal: string,
+  editMode: EditMode,
 ): Promise<void> {
   console.log(chalk.bold.green(`\n🌿 ${PRODUCT_NAME}\n`));
-  console.log(chalk.dim(`Model: ${config.default_model}`));
+  console.log(chalk.dim(`Model: ${config.default_model} | Mode: ${editMode.toUpperCase()} | Max steps: ${config.max_steps}`));
   console.log(chalk.dim(`Server: ${config.base_url}`));
   console.log(chalk.dim(`CWD: ${cwd}\n`));
   console.log(chalk.yellow(`Goal: ${goal}\n`));
 }
 
-async function checkSandbox(
-  config: Awaited<ReturnType<typeof loadConfig>>,
-): Promise<void> {
+async function checkSandbox(config: Awaited<ReturnType<typeof loadConfig>>): Promise<void> {
   if (!config.sandbox_docker) return;
-  const ok = await isDockerAvailable();
-  if (!ok) {
-    console.warn(chalk.yellow('Warning: sandbox_docker enabled but Docker is not available.'));
+  if (!(await isDockerAvailable())) {
+    console.warn(chalk.yellow('Warning: sandbox_docker enabled but Docker unavailable.'));
   }
 }
 
-function cliCallbacks() {
+function cliCallbacks(stream: boolean) {
   return {
     onPlan: (p: string) => console.log(chalk.blue('\nPlan:\n') + p + '\n'),
-    onThought: (t: string) => console.log(chalk.cyan(t)),
+    onThought: (t: string) => {
+      if (!stream) console.log(chalk.cyan(t));
+    },
+    onToken: stream ? (t: string) => process.stdout.write(chalk.cyan(t)) : undefined,
     onToolStart: (name: string, args: string) =>
       console.log(chalk.magenta(`\n▸ ${name}`) + chalk.dim(` ${args}`)),
-    onToolEnd: (name: string, out: string, err: boolean) =>
-      console.log(chalk[err ? 'red' : 'green'](`${name}: ${out}`)),
+    onToolEnd: (name: string, out: string, err: boolean) => {
+      if (stream) process.stdout.write('\n');
+      console.log(chalk[err ? 'red' : 'green'](`${name}: ${out}`));
+    },
+    onWarning: (msg: string) => console.log(chalk.yellow(`\n⚠️  ${msg}\n`)),
   };
 }
 
@@ -324,12 +447,8 @@ function commandExists(cmd: string): Promise<boolean> {
 }
 
 export function handleCliError(err: unknown): never {
-  if (isN0xError(err)) {
-    process.stderr.write(chalk.red(formatError(err)) + '\n');
-  } else if (err instanceof Error) {
-    process.stderr.write(chalk.red(err.message) + '\n');
-  } else {
-    process.stderr.write(chalk.red(String(err)) + '\n');
-  }
+  if (isN0xError(err)) process.stderr.write(chalk.red(formatError(err)) + '\n');
+  else if (err instanceof Error) process.stderr.write(chalk.red(err.message) + '\n');
+  else process.stderr.write(chalk.red(String(err)) + '\n');
   process.exit(1);
 }
