@@ -1,0 +1,22 @@
+import { unlink } from 'node:fs/promises';
+import { resolveWithinWorkspace } from '../lib/paths.js';
+import { deleteArgs } from './schemas.js';
+import type { Tool } from './types.js';
+import { parseArgs } from './types.js';
+
+export const deleteTool: Tool = {
+  name: 'Delete',
+  description: 'Delete a file within the workspace.',
+  schema: deleteArgs,
+  parameters: {
+    type: 'object',
+    properties: { path: { type: 'string' } },
+    required: ['path'],
+  },
+  async execute(raw, ctx) {
+    const args = parseArgs(deleteArgs, raw);
+    const filePath = resolveWithinWorkspace(ctx.cwd, args.path);
+    await unlink(filePath);
+    return { output: `Deleted ${args.path}` };
+  },
+};
