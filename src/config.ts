@@ -7,6 +7,7 @@ import { N0X_DATA_DIR, N0X_HOME_ENV } from './constants.js';
 import { configSchema, type N0xConfig } from './config/schema.js';
 import { N0xError } from './lib/errors.js';
 import { log } from './lib/logger.js';
+import { autoDetectBackend } from './llm/detect.js';
 
 export type { N0xConfig, ProjectMemory } from './config/schema.js';
 export { memorySchema } from './config/schema.js';
@@ -78,7 +79,20 @@ export async function loadConfig(): Promise<N0xConfig> {
       'Run: n0x init',
     );
   }
-  return result.data;
+
+  const cfg = result.data;
+
+  // Auto-detect backend: if configured URL is unresponsive, probe Ollama fallback
+  const detected = await autoDetectBackend(cfg.base_url);
+  if (detected && detected.url !== cfg.base_url) {
+    log.info(`Auto-detected backend: ${detected.type} at ${detected.url}`);
+    cfg.base_url = detected.url;
+    if (detected.type === 'ollama' && detected.model) {
+      cfg.default_model = detected.model;
+    }
+  }
+
+  return cfg;
 }
 
 export async function writeDefaultConfig(): Promise<void> {

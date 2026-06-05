@@ -28,6 +28,7 @@ import {
 } from './context/symbols.js';
 import type { EditMode } from './tools/types.js';
 import { createTerminalMarkdownStream, TerminalMarkdownStream } from 'markstream-cli';
+import { autoDetectBackend } from './llm/detect.js';
 
 const VERSION = '0.1.0';
 
@@ -313,8 +314,12 @@ export function createCli(): Command {
       console.log(chalk.dim(`  MCP:     ${mcpPath}`));
       console.log(chalk.dim(`  Context: ${ctxPath}`));
       console.log(chalk.dim(`  Symbols: ${ctx.symbols.length} in ${ctx.fileCount} files`));
-      console.log('\nStart Bonsai:');
+      console.log('\n' + chalk.bold('Start your model server (pick one):'));
+      console.log(chalk.cyan('  # Option A — llama-server (already compiled):'));
       console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf'));
+      console.log(chalk.cyan('  # Option B — Ollama (zero-setup, recommended):'));
+      console.log(chalk.cyan('  ollama run hf.co/prism-ml/Bonsai-4B-gguf:Q1_0'));
+      console.log(chalk.dim('  n0x auto-detects both — no config changes needed!'));
       console.log('\nVerify:');
       console.log(chalk.cyan('  n0x doctor'));
     });
@@ -347,19 +352,30 @@ export function createCli(): Command {
         detail: config.default_model,
       });
 
-      const health = await checkLlmHealth(config);
-      checks.push({
-        name: 'LLM server',
-        ok: health.ok,
-        detail: health.ok
-          ? `${config.base_url} (${health.latencyMs}ms) - Models: ${health.models?.join(', ') || 'none'}`
-          : (health.error ?? 'unreachable'),
-      });
+      // Probe both backends
+      console.log(chalk.dim('Probing backends...'));
+      const detected = await autoDetectBackend(config.base_url);
+      if (detected) {
+        const backendLabel = detected.type === 'ollama'
+          ? `Ollama at ${detected.url}`
+          : `llama-server at ${detected.url}`;
+        checks.push({
+          name: 'LLM backend',
+          ok: true,
+          detail: `${backendLabel} — model: ${detected.model ?? 'unknown'}`,
+        });
+      } else {
+        checks.push({
+          name: 'LLM backend',
+          ok: false,
+          detail: 'No server found on :8080 or :11434. Start llama-server or run: ollama run hf.co/prism-ml/Bonsai-4B-gguf:Q1_0',
+        });
+      }
 
       checks.push({
         name: 'ripgrep',
         ok: await commandExists('rg'),
-        detail: (await commandExists('rg')) ? 'installed' : 'missing',
+        detail: (await commandExists('rg')) ? 'installed' : 'missing — install with: sudo apt install ripgrep',
       });
 
       if (config.sandbox_docker) {
@@ -372,9 +388,11 @@ export function createCli(): Command {
       }
 
       checks.push({
-        name: 'Tavily',
+        name: 'Tavily search',
         ok: config.tavily_enabled,
-        detail: config.tavily_enabled ? 'WebSearch + WebExtract' : 'disabled',
+        detail: config.tavily_enabled
+          ? (config.tavily_api_key ? 'enabled (personal key)' : 'enabled (keyless mode)')
+          : 'disabled — set tavily_enabled = true in config to enable',
       });
 
       console.log(chalk.bold(`\n🌿 ${PRODUCT_NAME} doctor\n`));
@@ -427,6 +445,66 @@ export function createCli(): Command {
     .action(async () => {
       console.log(configPath());
       console.log(JSON.stringify(await loadConfig(), null, 2));
+    });
+
+  program
+    .command('use')
+    .description('Switch backend: ollama | llama-server | auto-detect')
+    .argument('[backend]', 'Backend to use: ollama, llama-server, or a custom URL')
+    .action(async (backend?: string) => {
+      // Auto-detect if no arg given
+      if (!backend || backend === 'auto') {
+        console.log(chalk.dim('Auto-detecting running backends...'));
+        const detected = await autoDetectBackend();
+        if (!detected) {
+          console.log(chalk.red('No backend detected on :8080 or :11434.'));
+          console.log(chalk.dim('Start one first:'));
+          console.log(chalk.cyan('  ollama run hf.co/prism-ml/Bonsai-4B-gguf:Q1_0'));
+          console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf'));
+          process.exit(1);
+        }
+        console.log(chalk.green(`✓ Detected: ${detected.type} at ${detected.url}`));
+        if (detected.model) console.log(chalk.dim(`  Model: ${detected.model}`));
+        console.log(chalk.dim('\nThis session will use the detected backend automatically.'));
+        console.log(chalk.dim(`To make it permanent, set in ~/.n0x/config.toml:`));
+        console.log(chalk.cyan(`  base_url = "${detected.url}"`));
+        return;
+      }
+
+      // Named shortcuts
+      const urlMap: Record<string, string> = {
+        'ollama': 'http://localhost:11434/v1',
+        'llama-server': 'http://localhost:8080/v1',
+        'llama': 'http://localhost:8080/v1',
+      };
+      const url = urlMap[backend.toLowerCase()] ?? backend;
+
+      // Validate it's live
+      const detected = await autoDetectBackend(url);
+      if (!detected || detected.url !== url) {
+        console.log(chalk.yellow(`Warning: ${url} does not appear to be responding.`));
+      } else {
+        console.log(chalk.green(`✓ ${detected.type} is live at ${url}`));
+      }
+
+      const configFile = configPath();
+      const raw = await readFile(configFile, 'utf8').catch(() => '');
+      const updated = raw.replace(
+        /^base_url\s*=\s*.+$/m,
+        `base_url = "${url}"`,
+      );
+      if (updated === raw) {
+        // Not found — append
+        await import('node:fs/promises').then(({ appendFile }) =>
+          appendFile(configFile, `\nbase_url = "${url}"\n`)
+        );
+      } else {
+        await import('node:fs/promises').then(({ writeFile: wf }) =>
+          wf(configFile, updated, 'utf8')
+        );
+      }
+      console.log(chalk.green(`✓ Config updated: base_url = "${url}"`));
+      console.log(chalk.dim(`Run 'n0x doctor' to verify.`));
     });
 
   return program;
