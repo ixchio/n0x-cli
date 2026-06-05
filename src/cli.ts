@@ -11,7 +11,6 @@ import {
 } from './config.js';
 import { runAgent } from './agent/loop.js';
 import { LLMClient } from './llm/client.js';
-import { checkLlmHealth } from './llm/health.js';
 import { analyzeRepository, formatRepoMap } from './repo/analyze.js';
 import { loadMemory, saveMemory } from './agent/memory.js';
 import { memorySchema } from './config/schema.js';
