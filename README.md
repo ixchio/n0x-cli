@@ -1,131 +1,190 @@
 # n0x-cli 🌿
 
 [![CI](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/n0x-cli)](https://www.npmjs.com/package/n0x-cli)
+[![Downloads](https://img.shields.io/npm/dw/n0x-cli)](https://www.npmjs.com/package/n0x-cli)
 
-> I just wanted to build my coffee shop website easily using Bonsai models. So I built this.
+> A local-first terminal coding agent. No cloud APIs. No subscriptions. Just your machine.
 
-**n0x-cli** is a fast, local-first terminal coding agent designed specifically to run on **Bonsai** models. It skips the cloud API keys and limits so you can just spin up a local model and get straight to building your projects. It's an autonomous ReAct agent that loops through thoughts, acts on your codebase, and gets the job done.
+**n0x-cli** is an autonomous ReAct coding agent that runs on **any local LLM** — Ollama, llama-server, or anything with an OpenAI-compatible API. It loops through thoughts, uses tools to read/write/run code, and gets your task done without sending your code to the cloud.
 
 **Repository:** [github.com/ixchio/n0x-cli](https://github.com/ixchio/n0x-cli)
 
 ---
 
-### Why n0x-cli?
+## Quick Start (60 seconds)
 
-Because it should be easy to build apps locally:
-- **Local compute**: Runs on `llama-server` with `prism-ml/Bonsai` models. Fast as hell.
-- **Smart Context**: It doesn't blindly stuff your whole repo into the context window. It surgically picks relevant files, uses `.n0xignore`, and tracks its own token budget.
-- **Trust via `n0x undo`**: The #1 reason people hate agents is they destroy files. `n0x` automatically backs up files to `~/.n0x/backups` before any edit, write, or patch. Plus, `--interactive` mode lets you confirm every diff. 
-- **Killer workflow features**: One-shot explanations (`n0x explain`), git-aware commit generation (`n0x commit`), and interactive REPLs (`n0x chat`).
-
----
-
-## The Stack
-
-| Feature | What it actually does |
-|---------|-------------|
-| **Agent Loop** | Think → Act (use a tool) → Observe → Repeat until DONE. |
-| **File Ops** | Read, Write, Edit (fuzzy + AST-safe), Delete, Rename. |
-| **Terminal** | Bash execution with a safety denylist (no fork bombs) + Docker sandbox. |
-| **Search** | Superfast `ripgrep` + `glob` under the hood. |
-| **MCP** | Plug in `@modelcontextprotocol` servers for GitHub, DBs, etc. |
-| **Tavily Web** | SDK built-in for deep web searches when the agent gets stuck. |
-
----
-
-## Commands You'll Actually Use
+### Option A — Ollama (Recommended, zero-setup)
 
 ```bash
-n0x run "refactor the auth flow"  # The main agent loop (max 20 steps)
-n0x run "fix login" -i            # Interactive mode: confirm every single diff before it saves
-n0x commit                        # Reads staged files, writes a conventional commit, prompts to apply
-n0x explain src/utils.ts          # Fast, single-shot breakdown of what a file does
-n0x fix "error text"              # Auto-patch based on a stack trace
-n0x chat                          # Interactive REPL session
-n0x doctor                        # Pings your local LLM server and checks your environment
-n0x map                           # Generates a tree-map of your repo structure
+# 1. Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 2. Pull a model (qwen2.5-coder:3b is the sweet spot for most laptops)
+ollama pull qwen2.5-coder:3b
+
+# 3. Install n0x-cli
+npm install -g n0x-cli
+
+# 4. Auto-configure n0x for your hardware
+n0x setup
+
+# 5. Build something
+cd ~/my-project
+n0x run "analyze this project and list the entry points"
+```
+
+### Option B — Bonsai via llama-server (ultra-tiny RAM)
+
+```bash
+# 1. Start llama-server with Bonsai-4B (requires compiled llama.cpp)
+llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf
+
+# 2. Install n0x-cli and point it at llama-server
+npm install -g n0x-cli
+n0x use llama-server
+
+# 3. Run
+n0x run "create an index.html coffee shop landing page"
+```
+
+---
+
+## Why n0x-cli?
+
+- **No API keys** — runs entirely on your machine.
+- **Works with any model** — Ollama, llama-server, or custom OpenAI-compatible endpoint.
+- **Smart context** — doesn't blindly stuff your whole repo into the prompt. Uses `.n0xignore`, symbol indexing, and a token budget.
+- **Safe by design** — backs up every file before editing. `n0x undo` reverts any change.
+- **Built for agents** — real ReAct loop with tool-call parsing, retry logic, and anti-loop detection.
+
+---
+
+## Commands
+
+```bash
+# Core agent
+n0x run "build a REST API for my blog"      # Main agent loop (max 20 steps by default)
+n0x run "add dark mode" --model qwen3:4b    # Override model for one run
+n0x run "refactor auth" -i                  # Interactive mode: confirm each diff before writing
+n0x run "add tests" --dry                   # Preview only — show diffs, don't write
+
+# Utilities
+n0x chat                     # Interactive REPL session
+n0x explain src/auth.ts      # Fast single-shot file breakdown
+n0x fix "TypeError: ..."     # Auto-patch from a stack trace
+n0x commit                   # AI-written conventional commit from staged diff
+
+# Setup & diagnostics
+n0x setup                    # Auto-detect RAM, pull best model via Ollama
+n0x doctor                   # Check LLM connectivity, tool availability
+n0x use ollama               # Switch backend to Ollama (port 11434)
+n0x use llama-server         # Switch backend to llama-server (port 8080)
+n0x use auto                 # Auto-detect whichever backend is running
+
+# Info
+n0x models                   # Full model recommendations with pull commands
+n0x map                      # Repo structure tree-map
+n0x symbols                  # Symbol index from .n0x/context.json
+n0x config                   # Show current config
+n0x memory                   # Show/set project memory (persistent agent notes)
 ```
 
 ---
 
 ## Model Guide
 
-Bonsai models punch way above their weight. Here's what we recommend:
+n0x works with any model, but here are the ones that are tested and reliable:
 
-| Task | Model to use |
-|------|-------|
-| **Fast edits** | `prism-ml/Bonsai-1.7B-gguf:Bonsai-1.7B.gguf` |
-| **Daily Driver (Default)** | `prism-ml/Bonsai-4B-gguf:Bonsai-4B.gguf` |
-| **Complex Refactors** | `prism-ml/Bonsai-8B-gguf:Bonsai-8B.gguf` |
-| **Apple Silicon (Macs)** | `prism-ml/Bonsai-8B-mlx-1bit` |
+### Ollama (Recommended — native tool calling, easy install)
 
-*Pro-tip: Run `n0x models` in your terminal for a full breakdown.*
+| Model | RAM | Best For | Pull Command |
+|-------|-----|----------|-------------|
+| `qwen2.5-coder:3b` ⭐ | ~2 GB | **Default** — fast, great tool use | `ollama pull qwen2.5-coder:3b` |
+| `qwen2.5-coder:7b` | ~5 GB | Complex multi-file refactors | `ollama pull qwen2.5-coder:7b` |
+| `qwen3:4b` | ~3 GB | Best reasoning at 4B | `ollama pull qwen3:4b` |
+| `gemma3:4b` | ~3 GB | Great instruction following | `ollama pull gemma3:4b` |
+| `qwen2.5-coder:14b` | ~9 GB | Near-frontier coding quality | `ollama pull qwen2.5-coder:14b` |
 
----
+### Bonsai via llama-server (1-bit, ultra-tiny RAM, no GPU required)
 
-## Quick Start (Get it running in 60s)
+| Model | RAM | Notes |
+|-------|-----|-------|
+| `Bonsai-4B` | ~0.6 GB | Fast, but weaker on long agent tasks |
+| `Bonsai-8B` | ~1.2 GB | Better reasoning for complex tasks |
 
-### 1. Fire up Bonsai
-We recommend `llama-server`. Just let it run in the background.
-```bash
-llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf
-```
-*(Runs on `http://localhost:8080/v1`)*
-
-### 2. Install n0x
-```bash
-npm install -g n0x-cli
-```
-
-### 3. Initialize your project
-Go to any codebase you want to work on:
-```bash
-cd ~/my-project
-n0x init      # Builds symbol index, sets up .n0xignore
-n0x doctor    # Confirms LLM is reachable and models are loaded
-```
-
-### 4. Let it rip
-```bash
-n0x run "analyze this project and list entry points"
-```
+> **Which one should I pick?**
+> - 8GB RAM laptop → `qwen2.5-coder:3b` (Ollama)
+> - 16GB RAM → `qwen2.5-coder:7b` (Ollama)
+> - Only 4GB RAM or need minimal footprint → Bonsai-4B (llama-server)
+>
+> Run `n0x models` for the full breakdown with pull commands.
 
 ---
 
 ## Configuration
 
-Your global config lives in `~/.n0x/config.toml`. It looks something like this:
+`~/.n0x/config.toml` — created automatically on first run:
 
 ```toml
-default_model = "bonsai-4b"
-base_url = "http://localhost:8080/v1"
+default_model = "qwen2.5-coder:3b"
+base_url = "http://localhost:11434/v1"    # Ollama
 api_key = "none"
 max_steps = 20
 bash_timeout_ms = 120000
-llm_timeout_ms = 120000
+llm_timeout_ms = 300000                   # 5 min — plenty for large files
 
-# Tavily (Keyless mode by default, or bring your own API key)
-tavily_enabled = true
-tavily_search_depth = "advanced"
+# Tavily web search — off by default (causes context overflow on small models)
+tavily_enabled = false
+# tavily_api_key = "tvly-..."             # Get a free key at tavily.com
+tavily_search_depth = "basic"
 ```
+
+**Switch model for a single task** (no config edit needed):
+```bash
+n0x run --model qwen2.5-coder:7b "refactor the entire auth module"
+```
+
+**Switch backend permanently:**
+```bash
+n0x use ollama        # → http://localhost:11434/v1
+n0x use llama-server  # → http://localhost:8080/v1
+n0x use auto          # → auto-detect whichever is alive
+```
+
+---
+
+## The Stack
+
+| Feature | Detail |
+|---------|--------|
+| **Agent Loop** | ReAct: Think → Act (tool call) → Observe → Repeat |
+| **File Tools** | Read, Write, Edit (fuzzy match), ApplyPatch (unified diff), Delete, Rename |
+| **Terminal** | Bash execution with safety denylist (no `rm -rf /`, no fork bombs) |
+| **Search** | `ripgrep` + `glob` under the hood |
+| **MCP** | Plug in `@modelcontextprotocol` servers (GitHub, databases, etc.) |
+| **Streaming** | Real-time syntax-highlighted output via `markstream-cli` |
+| **Memory** | Persistent project notes across sessions |
+| **Backups** | Every file edit backed up to `~/.n0x/backups/` |
+
+---
+
+## Safety
+
+- **Path confinement** — tools cannot escape the workspace via `../`
+- **Bash denylist** — blocks `rm -rf /`, fork bombs, and other destructive patterns
+- **Docker sandbox** — optional containerized execution (`sandbox_docker = true`)
+- **Secret redaction** — API keys are scrubbed from agent logs
+- **Auto-backups** — every file write/patch/edit is backed up before mutation
+- **`n0x undo`** — reverts the last agent action from backup
 
 ---
 
 ## Documentation
 
-Check out the `docs/` folder for deeper dives:
-- [**workflow.md**](./docs/workflow.md): How to actually use n0x effectively in your daily dev loop.
-- [**development.md**](./docs/development.md): How to hack on n0x itself.
-- [**changelog.md**](./docs/changelog.md): What's new.
-
----
-
-## Safety First
-- **Confined Paths**: Tools cannot escape the workspace via `../`.
-- **Bash Denylist**: Hardcoded rules block `rm -rf /`, fork bombs, etc.
-- **Docker Sandbox**: Optional containerized execution (`sandbox_docker = true`).
-- **Secret Redaction**: API keys are scrubbed from the agent logs.
-- **Backups**: Every file edit automatically backs up the old version to `~/.n0x/backups/`.
+- [**workflow.md**](./docs/workflow.md) — How to use n0x effectively in your daily dev loop
+- [**development.md**](./docs/development.md) — How to hack on n0x itself
+- [**changelog.md**](./docs/changelog.md) — What's changed
 
 ---
 
