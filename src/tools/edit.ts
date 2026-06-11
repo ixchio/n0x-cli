@@ -9,7 +9,7 @@ import { parseArgs } from './types.js';
 export const editTool: Tool = {
   name: 'Edit',
   description:
-    'Replace exact text in a file (AST-safe when unique). Shows unified diff. Use ApplyPatch for large multi-hunk edits.',
+    'Replace exact text in a file. Requires a unique match (whitespace-tolerant fallback). Shows unified diff. Use ApplyPatch for large multi-hunk edits.',
   schema: editArgs,
   parameters: {
     type: 'object',

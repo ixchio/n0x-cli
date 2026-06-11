@@ -89,6 +89,9 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
 
     let stepsUsed = 0;
     const maxSteps = config.max_steps;
+    const recentCallSigs: string[] = [];
+    const LOOP_WINDOW = 4;
+    const LOOP_THRESHOLD = 3;
 
     while (stepsUsed < maxSteps) {
       if (signal?.aborted) {
@@ -166,22 +169,61 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
       for (const tc of response.tool_calls) {
         if (signal?.aborted) break;
 
-        const extractArgs = (raw: string): Record<string, unknown> => {
-          if (!raw) return {};
-          try { return JSON.parse(raw.trim()); } catch { /* ignore */ }
+        const extractArgs = (
+          raw: string,
+        ): { args: Record<string, unknown> | null; parseError: string | null } => {
+          if (!raw) return { args: {}, parseError: null };
+          const tryParse = (s: string): Record<string, unknown> | null => {
+            try {
+              const v = JSON.parse(s.trim());
+              return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+            } catch {
+              return null;
+            }
+          };
+          const args = tryParse(raw);
+          if (args) return { args, parseError: null };
           const match = raw.match(/\{[\s\S]*\}/);
-          if (match) { try { return JSON.parse(match[0]); } catch { /* ignore */ } }
+          if (match) { const a = tryParse(match[0]); if (a) return { args: a, parseError: null }; }
           const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-          if (fence?.[1]) { try { return JSON.parse(fence[1]); } catch { /* ignore */ } }
-          return {};
+          if (fence?.[1]) { const a = tryParse(fence[1]); if (a) return { args: a, parseError: null }; }
+          return {
+            args: null,
+            parseError: `Could not parse tool arguments as JSON. Raw received: ${raw.slice(0, 200)}`,
+          };
         };
-        const args = extractArgs(tc.function.arguments || '');
+        const { args, parseError } = extractArgs(tc.function.arguments || '');
+
+        if (parseError) {
+          callbacks?.onWarning?.(parseError);
+          messages.push({
+            role: 'tool',
+            content: parseError,
+            tool_call_id: tc.id,
+            name: tc.function.name,
+          });
+          recentCallSigs.push(`${tc.function.name}|__parse_error__`);
+          if (recentCallSigs.length > LOOP_WINDOW) recentCallSigs.shift();
+          continue;
+        }
+
+        const sig = `${tc.function.name}|${JSON.stringify(args)}`;
+        recentCallSigs.push(sig);
+        if (recentCallSigs.length > LOOP_WINDOW) recentCallSigs.shift();
+        const repeats = recentCallSigs.filter((s) => s === sig).length;
+        if (repeats >= LOOP_THRESHOLD) {
+          const hint = `Loop detected: you have called ${tc.function.name} with the same arguments ${repeats} times in the last ${LOOP_WINDOW} steps. Do NOT repeat this call. Change your approach: try a different tool, gather different context, or conclude with a partial answer starting with what you have observed.`;
+          callbacks?.onWarning?.(hint);
+          messages.push({ role: 'user', content: `[system] ${hint}` });
+          break;
+        }
+
         const tool = getToolByName(tools, tc.function.name);
-        
+
         callbacks?.onToolStart?.(tc.function.name, JSON.stringify(args).slice(0, 160));
 
         const result = tool
-          ? await executeTool(tool, args, ctx)
+          ? await executeTool(tool, args!, ctx)
           : { output: `Unknown tool: ${tc.function.name}`, isError: true };
 
         advancePlan(plan, tc.function.name, !result.isError);

@@ -14,7 +14,7 @@ import { LLMClient } from './llm/client.js';
 import { analyzeRepository, formatRepoMap } from './repo/analyze.js';
 import { loadMemory, saveMemory } from './agent/memory.js';
 import { memorySchema } from './config/schema.js';
-import { PRODUCT_NAME, BONSAI_MODELS, MODEL_RECOMMENDATIONS } from './constants.js';
+import { PRODUCT_NAME, MODEL_RECOMMENDATIONS } from './constants.js';
 import { isDockerAvailable } from './sandbox/docker.js';
 import { formatError, isN0xError } from './lib/errors.js';
 import { setLogLevel } from './lib/logger.js';
@@ -48,13 +48,26 @@ async function runAgentCommand(opts: {
   goal: string;
   cwd: string;
   maxSteps?: number;
+  model?: string;
   dry?: boolean;
   apply?: boolean;
   interactive?: boolean;
   stream?: boolean;
 }): Promise<void> {
   const config = await loadConfig();
-  validateBonsai(config.default_model);
+
+  // Allow --model flag or env override to switch model on the fly
+  if (opts.model) {
+    config.default_model = opts.model;
+    // If user explicitly sets a model, update base_url to match expected backend
+    if (!opts.model.includes('bonsai')) {
+      const detected = await autoDetectBackend(config.base_url);
+      if (!detected) {
+        // Fallback: assume Ollama if no backend found and non-bonsai model requested
+        config.base_url = 'http://localhost:11434/v1';
+      }
+    }
+  }
 
   const cwd = resolve(opts.cwd);
   await assertWorkspace(cwd);
@@ -89,7 +102,7 @@ export function createCli(): Command {
 
   program
     .name('n0x')
-    .description(`${PRODUCT_NAME} — local-first coding agent (Bonsai only)`)
+    .description(`${PRODUCT_NAME} — local-first coding agent (Ollama + Bonsai)`)
     .version(VERSION)
     .option('-v, --verbose', 'Debug logging')
     .hook('preAction', (thisCommand) => {
@@ -103,6 +116,7 @@ export function createCli(): Command {
     .argument('[goal]', 'What to build or fix')
     .option('-p, --prompt <text>', 'Goal prompt')
     .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .option('-m, --model <name>', 'Override model (e.g. qwen2.5-coder:7b)')
     .option('--max-steps <n>', 'Max iterations (default 20)', (v) => parseInt(v, 10))
     .option('--dry', 'Preview diffs only — do not write files')
     .option('--apply', 'Write changes to disk (default)')
@@ -111,6 +125,7 @@ export function createCli(): Command {
     .action(async (goal: string | undefined, opts: {
       prompt?: string;
       cwd: string;
+      model?: string;
       maxSteps?: number;
       dry?: boolean;
       apply?: boolean;
@@ -122,6 +137,7 @@ export function createCli(): Command {
       await runAgentCommand({
         goal: userGoal,
         cwd: opts.cwd,
+        model: opts.model,
         maxSteps: opts.maxSteps,
         dry: opts.dry,
         apply: opts.apply,
@@ -230,7 +246,6 @@ export function createCli(): Command {
     .option('--dry', 'Preview edits only')
     .action(async (opts: { cwd: string; dry?: boolean }) => {
       const config = await loadConfig();
-      validateBonsai(config.default_model);
       const cwd = resolve(opts.cwd);
       await assertWorkspace(cwd);
 
@@ -313,28 +328,47 @@ export function createCli(): Command {
       console.log(chalk.dim(`  MCP:     ${mcpPath}`));
       console.log(chalk.dim(`  Context: ${ctxPath}`));
       console.log(chalk.dim(`  Symbols: ${ctx.symbols.length} in ${ctx.fileCount} files`));
-      console.log('\n' + chalk.bold('Start your model server (pick one):'));
-      console.log(chalk.cyan('  # Option A — llama-server (already compiled):'));
-      console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf'));
-      console.log(chalk.cyan('  # Option B — Ollama (zero-setup, recommended):'));
-      console.log(chalk.cyan('  ollama run hf.co/prism-ml/Bonsai-4B-gguf:Q1_0'));
-      console.log(chalk.dim('  n0x auto-detects both — no config changes needed!'));
+      console.log('\n' + chalk.bold('Start your model server (llama-server recommended):'));
+      console.log(chalk.cyan('  # Mainline llama.cpp (Q1_0):'));
+      console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B-Q1_0.gguf'));
+      console.log(chalk.cyan('  # PrismML fork (Ternary Q2_0):'));
+      console.log(chalk.cyan('  llama-server -m Ternary-Bonsai-4B-Q2_0.gguf -c 4096'));
+      console.log(chalk.yellow('  Note: Ollama is NOT recommended for Bonsai — its Qwen3 template'));
+      console.log(chalk.yellow('        forces thinking tokens on every response and breaks 1-bit models.'));
       console.log('\nVerify:');
-      console.log(chalk.cyan('  n0x doctor'));
+      console.log('\n' + chalk.bold('Run your model backend:'));
+      console.log(chalk.cyan('  n0x setup'));
+    });
+
+  program
+    .command('setup')
+    .description('Interactive setup for LLM backends')
+    .action(async () => {
+      console.log(chalk.bold('\n🌿 n0x setup\n'));
+      console.log('1. Install Ollama: https://ollama.com');
+      console.log('2. Pull a recommended model:');
+      console.log(chalk.cyan('   ollama run qwen2.5-coder:7b'));
+      console.log('3. Set as default:');
+      console.log(chalk.cyan('   n0x use ollama'));
     });
 
   program
     .command('models')
-    .description('Bonsai model recommendations')
+    .description('Show recommended models and how to pull them')
     .action(() => {
-      console.log(chalk.bold('\nBonsai model guide\n'));
+      console.log(chalk.bold('\n🌿 n0x — recommended models\n'));
+      console.log(chalk.dim('Install Ollama first: curl -fsSL https://ollama.com/install.sh | sh\n'));
       for (const m of MODEL_RECOMMENDATIONS) {
-        console.log(chalk.cyan(m.id));
+        const tag = m.backend === 'ollama' ? chalk.green('[Ollama]') : chalk.yellow('[llama-server]');
+        console.log(`${tag} ${chalk.cyan(m.id)}`);
         console.log(`  Task: ${m.task}`);
-        console.log(`  HF:   ${m.hf}`);
         console.log(`  RAM:  ${m.ram}`);
-        console.log(`  Why:  ${m.why}\n`);
+        console.log(`  Why:  ${m.why}`);
+        if (m.ollamaCmd) console.log(`  Run:  ${chalk.dim(m.ollamaCmd)}`);
+        console.log();
       }
+      console.log(chalk.dim('Switch model for one run:'));
+      console.log(chalk.cyan('  n0x run --model qwen2.5-coder:7b "refactor the auth module"'));
     });
 
   program
@@ -363,6 +397,21 @@ export function createCli(): Command {
           ok: true,
           detail: `${backendLabel} — model: ${detected.model ?? 'unknown'}`,
         });
+
+        const smoke = await runToolCallSmokeTest(detected.url, detected.model ?? config.default_model, config.api_key);
+        checks.push({
+          name: 'Tool-call smoke test',
+          ok: smoke.ok,
+          detail: smoke.detail,
+        });
+
+        if (detected.type === 'ollama') {
+          checks.push({
+            name: 'Bonsai compatibility',
+            ok: false,
+            detail: 'Ollama + Bonsai is not recommended — Qwen3 template forces <think> tokens. Use llama-server.',
+          });
+        }
       } else {
         checks.push({
           name: 'LLM backend',
@@ -458,8 +507,8 @@ export function createCli(): Command {
         if (!detected) {
           console.log(chalk.red('No backend detected on :8080 or :11434.'));
           console.log(chalk.dim('Start one first:'));
-          console.log(chalk.cyan('  ollama run hf.co/prism-ml/Bonsai-4B-gguf:Q1_0'));
-          console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf'));
+          console.log(chalk.cyan('  llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B-Q1_0.gguf'));
+          console.log(chalk.cyan('  ollama run hf.co/prism-ml/Bonsai-4B-gguf:Q1_0   # not recommended for Bonsai'));
           process.exit(1);
         }
         console.log(chalk.green(`✓ Detected: ${detected.type} at ${detected.url}`));
@@ -509,13 +558,8 @@ export function createCli(): Command {
   return program;
 }
 
-function validateBonsai(model: string): void {
-  if (!LLMClient.isBonsaiModel(model)) {
-    console.error(chalk.red('Only Bonsai models are supported.'));
-    console.error(`Allowed: ${BONSAI_MODELS.join(', ')}`);
-    process.exit(1);
-  }
-}
+// validateBonsai removed — n0x now works with any model (Ollama, llama-server, etc.)
+
 
 async function printBanner(
   config: Awaited<ReturnType<typeof loadConfig>>,
@@ -604,4 +648,93 @@ export function handleCliError(err: unknown): never {
   else if (err instanceof Error) process.stderr.write(chalk.red(err.message) + '\n');
   else process.stderr.write(chalk.red(String(err)) + '\n');
   process.exit(1);
+}
+
+async function runToolCallSmokeTest(
+  baseUrl: string,
+  model: string,
+  apiKey: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a tool-calling test harness. You must call the ping function with msg="ok". Respond with a tool call only.',
+          },
+          { role: 'user', content: 'ping now' },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'ping',
+              description: 'A no-op function used for capability testing.',
+              parameters: {
+                type: 'object',
+                properties: { msg: { type: 'string' } },
+                required: ['msg'],
+              },
+            },
+          },
+        ],
+        tool_choice: 'required',
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      return { ok: false, detail: `chat completion HTTP ${res.status}` };
+    }
+
+    const data = (await res.json()) as {
+      choices?: Array<{
+        message?: {
+          tool_calls?: Array<{
+            function?: { name?: string; arguments?: string };
+          }>;
+        };
+      }>;
+    };
+
+    const tc = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!tc?.function?.name) {
+      return { ok: false, detail: 'model did not produce a tool call (may not support tool calling)' };
+    }
+    if (tc.function.name !== 'ping') {
+      return { ok: false, detail: `model called wrong tool: ${tc.function.name}` };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(tc.function.arguments ?? '{}');
+    } catch {
+      return { ok: false, detail: 'model produced tool call but args are not valid JSON' };
+    }
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      typeof (parsed as Record<string, unknown>).msg !== 'string'
+    ) {
+      return { ok: false, detail: 'model produced tool call but missing required "msg" arg' };
+    }
+    return { ok: true, detail: `model produced valid tool call (msg="${(parsed as Record<string, string>).msg}")` };
+  } catch (e) {
+    clearTimeout(timer);
+    return {
+      ok: false,
+      detail: `smoke test failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
 }
