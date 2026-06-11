@@ -34,27 +34,38 @@ export async function ensureN0xHome(): Promise<string> {
   return home;
 }
 
-const CONFIG_TEMPLATE = `# n0x — local-first coding agent (Bonsai only)
+const CONFIG_TEMPLATE = `# n0x — local-first coding agent
 # Docs: https://github.com/ixchio/n0x-cli
+#
+# QUICKSTART (recommended):
+#   curl -fsSL https://ollama.com/install.sh | sh
+#   ollama run qwen2.5-coder:3b
+#   n0x run "your task here"
+#
+# Using Bonsai (llama-server)?
+#   llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf
+#   Then set: base_url = "http://localhost:8080/v1" and default_model = "bonsai-4b"
 
 default_provider = "local"
-default_model = "bonsai-4b"
-base_url = "http://localhost:8080/v1"
+default_model = "qwen2.5-coder:3b"
+base_url = "http://localhost:11434/v1"
 api_key = "none"
 max_steps = 20
 bash_timeout_ms = 120000
-llm_timeout_ms = 120000
+llm_timeout_ms = 300000
 git_context = true
 stream_output = true
 sandbox_docker = false
 sandbox_image = "node:22-alpine"
 
-# Tavily web tools (https://tavily.com) — search + extract
-tavily_enabled = true
-tavily_search_depth = "advanced"
-tavily_extract_depth = "advanced"
-# tavily_api_key = "tvly-..."  # or export TAVILY_API_KEY
+# Tavily web search — disabled by default (causes context overflow on small models)
+# Get a free key at https://tavily.com then uncomment:
+tavily_enabled = false
+# tavily_api_key = "tvly-..."
+tavily_search_depth = "basic"
+tavily_extract_depth = "basic"
 `;
+
 
 export async function loadConfig(): Promise<N0xConfig> {
   const path = configPath();
@@ -82,13 +93,24 @@ export async function loadConfig(): Promise<N0xConfig> {
 
   const cfg = result.data;
 
-  // Auto-detect backend: if configured URL is unresponsive, probe Ollama fallback
+  // Auto-detect backend: probe llama-server first, then Ollama as a last resort.
+  // Ollama is intentionally deprioritized for Bonsai because its Qwen3 chat
+  // template forces <think> tokens on every response, which defeats 1-bit
+  // quantization. We still accept it as a fallback so users with non-Bonsai
+  // configs aren't broken, but we log a loud warning when it's chosen.
   const detected = await autoDetectBackend(cfg.base_url);
   if (detected && detected.url !== cfg.base_url) {
     log.info(`Auto-detected backend: ${detected.type} at ${detected.url}`);
     cfg.base_url = detected.url;
-    if (detected.type === 'ollama' && detected.model) {
-      cfg.default_model = detected.model;
+    if (detected.type === 'ollama') {
+      log.warn(
+        'Ollama is not the recommended backend for Bonsai models. ' +
+          'The Qwen3 chat template forces thinking tokens on every response. ' +
+          'Use llama-server for reliable Bonsai behavior.',
+      );
+      if (detected.model) {
+        cfg.default_model = detected.model;
+      }
     }
   }
 

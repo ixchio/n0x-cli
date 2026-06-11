@@ -12,11 +12,11 @@ export const configSchema = z.object({
   sandbox_docker: z.boolean().default(false),
   sandbox_image: z.string().default('node:22-alpine'),
   bash_timeout_ms: z.number().int().min(1000).max(600_000).default(120_000),
-  llm_timeout_ms: z.number().int().min(5000).max(600_000).default(120_000),
+  llm_timeout_ms: z.number().int().min(5000).max(600_000).default(300_000), // 5 min default
   tavily_api_key: z.string().optional(),
-  tavily_search_depth: z.enum(['basic', 'advanced']).default('advanced'),
-  tavily_extract_depth: z.enum(['basic', 'advanced']).default('advanced'),
-  tavily_enabled: z.boolean().default(true),
+  tavily_search_depth: z.enum(['basic', 'advanced']).default('basic'), // basic = less tokens = model won't drown
+  tavily_extract_depth: z.enum(['basic', 'advanced']).default('basic'),
+  tavily_enabled: z.boolean().default(false), // off by default — models work better without web dumps
 });
 
 export type N0xConfig = z.infer<typeof configSchema>;
