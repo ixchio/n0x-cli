@@ -1,6 +1,6 @@
 {
   "name": "n0x-cli",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "n0x-cli — Claude Code quality for 4GB systems, powered by Bonsai",
   "type": "module",
   "bin": {
