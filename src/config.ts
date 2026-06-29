@@ -41,18 +41,17 @@ export async function hasConfig(): Promise<boolean> {
 const CONFIG_TEMPLATE = `# n0x — local-first coding agent
 # Docs: https://github.com/ixchio/n0x-cli
 #
-# QUICKSTART (recommended):
-#   curl -fsSL https://ollama.com/install.sh | sh
-#   ollama run qwen2.5-coder:3b
+# QUICKSTART (Bonsai — default):
+#   llama-server -hf prism-ml/Ternary-Bonsai-4B-gguf --hf-file Ternary-Bonsai-4B-Q2_0.gguf
 #   n0x run "your task here"
 #
-# Using Bonsai (llama-server)?
-#   llama-server -hf prism-ml/Bonsai-4B-gguf --hf-file Bonsai-4B.gguf
-#   Then set: base_url = "http://localhost:8080/v1" and default_model = "bonsai-4b"
+# Prefer Ollama? Uncomment the two lines below and comment out the Bonsai ones:
+#   default_model = "qwen2.5-coder:3b"
+#   base_url = "http://localhost:11434/v1"
 
 default_provider = "local"
-default_model = "qwen2.5-coder:3b"
-base_url = "http://localhost:11434/v1"
+default_model = "ternary-bonsai-4b"
+base_url = "http://localhost:8080/v1"
 api_key = "none"
 max_steps = 20
 bash_timeout_ms = 120000
