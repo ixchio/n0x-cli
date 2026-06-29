@@ -6,7 +6,10 @@ export type ErrorCode =
   | 'TOOL_DENIED'
   | 'TOOL_TIMEOUT'
   | 'TOOL_FAILED'
-  | 'MCP_CONNECT_FAILED';
+  | 'MCP_CONNECT_FAILED'
+  | 'PARSE_ERROR'
+  | 'INVALID_INPUT'
+  | 'RATE_LIMIT_EXCEEDED';
 
 export class N0xError extends Error {
   readonly code: ErrorCode;

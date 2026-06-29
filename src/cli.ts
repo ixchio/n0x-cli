@@ -8,17 +8,21 @@ import {
   configPath,
   getN0xHome,
   mcpConfigPath,
+  hasConfig,
 } from './config.js';
+import { BonsaiManager } from './setup/manager.js';
+import { firstRunSetup, interactiveModelSetup } from './setup/first-run.js';
+import { showDoctorResults, showError } from './setup/ui.js';
 import { runAgent } from './agent/loop.js';
+import { ReflectionEngine } from './agent/reflection.js';
 import { LLMClient } from './llm/client.js';
 import { analyzeRepository, formatRepoMap } from './repo/analyze.js';
 import { loadMemory, saveMemory } from './agent/memory.js';
 import { memorySchema } from './config/schema.js';
-import { PRODUCT_NAME, MODEL_RECOMMENDATIONS } from './constants.js';
+import { PRODUCT_NAME } from './constants.js';
 import { isDockerAvailable } from './sandbox/docker.js';
 import { formatError, isN0xError } from './lib/errors.js';
 import { setLogLevel } from './lib/logger.js';
-import { spawn } from 'node:child_process';
 import {
   buildSymbolIndex,
   saveProjectContext,
@@ -29,7 +33,7 @@ import type { EditMode } from './tools/types.js';
 import { createTerminalMarkdownStream, TerminalMarkdownStream } from 'markstream-cli';
 import { autoDetectBackend } from './llm/detect.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.5.0'; // Bonsai UX release
 
 function createAbortController(): AbortController {
   const ac = new AbortController();
@@ -122,6 +126,7 @@ export function createCli(): Command {
     .option('--apply', 'Write changes to disk (default)')
     .option('-i, --interactive', 'Confirm each file write interactively')
     .option('--no-stream', 'Disable streaming tokens')
+    .option('--low-memory', 'Optimize for systems with <6GB RAM')
     .action(async (goal: string | undefined, opts: {
       prompt?: string;
       cwd: string;
@@ -131,9 +136,34 @@ export function createCli(): Command {
       apply?: boolean;
       interactive?: boolean;
       noStream?: boolean;
+      lowMemory?: boolean;
     }) => {
       const userGoal = opts.prompt ?? goal;
       if (!userGoal?.trim()) throw new Error('Provide a goal: n0x run "fix the login bug"');
+
+      // Check if first run
+      if (!(await hasConfig())) {
+        console.log(chalk.yellow('🌿 First run detected. Running setup...\n'));
+        await firstRunSetup();
+      }
+
+      // Ensure server is running
+      const manager = new BonsaiManager(getN0xHome());
+      await manager.init();
+      await ensureServerRunning(manager);
+
+      // Low memory mode
+      const config = await loadConfig();
+      if (opts.lowMemory) {
+        config.stream_output = false;
+        config.max_steps = Math.min(config.max_steps, 10);
+        config.tavily_enabled = false;
+        console.log(chalk.yellow('🔋 Low memory mode enabled'));
+        console.log(chalk.dim('  - Streaming: OFF'));
+        console.log(chalk.dim('  - Max steps: 10'));
+        console.log(chalk.dim('  - Web search: OFF\n'));
+      }
+
       await runAgentCommand({
         goal: userGoal,
         cwd: opts.cwd,
@@ -177,42 +207,44 @@ export function createCli(): Command {
     .description('Generate a conventional commit message from staged changes')
     .option('-C, --cwd <dir>', 'Working directory', process.cwd())
     .action(async (opts: { cwd: string }) => {
-      const { execSync } = await import('node:child_process');
+      const { execFileSync } = await import('node:child_process');
       const cwd = resolve(opts.cwd);
       let diff = '';
       try {
-        diff = execSync('git diff --staged', { cwd, encoding: 'utf8' }).trim();
+        // SAFE: Using array args prevents command injection
+        diff = execFileSync('git', ['diff', '--staged'], { cwd, encoding: 'utf8' }).trim();
       } catch {
         console.log(chalk.red('Not a git repository or git error.'));
         return;
       }
-      
+
       if (!diff) {
         console.log(chalk.yellow('Nothing staged. Run git add first.'));
         return;
       }
-      
+
       const config = await loadConfig();
       const llm = new LLMClient(config);
       const messages = [
         { role: 'system' as const, content: 'Write a conventional commit message for this diff. Output ONLY the message, one line, no backticks, no markdown.' },
         { role: 'user' as const, content: `Diff:\n\n${diff.slice(0, 15000)}` },
       ];
-      
+
       console.log(chalk.dim('Generating commit message...'));
       const res = await llm.chat(messages);
       const msg = res.content?.trim().replace(/^[`"']|[`"']$/g, '') ?? '';
-      
+
       if (!msg) {
         console.log(chalk.red('Failed to generate commit message.'));
         return;
       }
-      
+
       const { confirmAction } = await import('./lib/prompt.js');
       console.log(`\nProposed commit message:\n${chalk.green.bold(msg)}\n`);
       const confirm = await confirmAction('Apply this commit?');
       if (confirm) {
-        execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, { cwd, stdio: 'inherit' });
+        // SAFE: Using array args prevents command injection
+        execFileSync('git', ['commit', '-m', msg], { cwd, stdio: 'inherit' });
       }
     });
 
@@ -342,115 +374,95 @@ export function createCli(): Command {
 
   program
     .command('setup')
-    .description('Interactive setup for LLM backends')
+    .description('Interactive model setup and configuration')
     .action(async () => {
-      console.log(chalk.bold('\n🌿 n0x setup\n'));
-      console.log('1. Install Ollama: https://ollama.com');
-      console.log('2. Pull a recommended model:');
-      console.log(chalk.cyan('   ollama run qwen2.5-coder:7b'));
-      console.log('3. Set as default:');
-      console.log(chalk.cyan('   n0x use ollama'));
+      await interactiveModelSetup();
     });
 
   program
     .command('models')
-    .description('Show recommended models and how to pull them')
-    .action(() => {
-      console.log(chalk.bold('\n🌿 n0x — recommended models\n'));
-      console.log(chalk.dim('Install Ollama first: curl -fsSL https://ollama.com/install.sh | sh\n'));
-      for (const m of MODEL_RECOMMENDATIONS) {
-        const tag = m.backend === 'ollama' ? chalk.green('[Ollama]') : chalk.yellow('[llama-server]');
-        console.log(`${tag} ${chalk.cyan(m.id)}`);
-        console.log(`  Task: ${m.task}`);
-        console.log(`  RAM:  ${m.ram}`);
-        console.log(`  Why:  ${m.why}`);
-        if (m.ollamaCmd) console.log(`  Run:  ${chalk.dim(m.ollamaCmd)}`);
+    .description('Show available Bonsai models')
+    .action(async () => {
+      const manager = new BonsaiManager(getN0xHome());
+      await manager.init();
+
+      const allModels = manager.getAllModels();
+      const ramInfo = manager.getRAMInfo();
+      const recommended = manager.recommendModel();
+
+      console.log(chalk.bold.green('\n🌿 n0x - available models\n'));
+      console.log(chalk.dim('Your system: ') + chalk.cyan(`${ramInfo.totalGB.toFixed(1)}GB RAM (${ramInfo.tier} tier)`));
+      console.log();
+
+      console.log(chalk.bold('Bonsai Family (Optimized for Low RAM):\n'));
+
+      for (const model of allModels) {
+        const isRecommended = model.id === recommended.id;
+        const isDownloaded = await manager.hasModel(model.id);
+
+        const prefix = isDownloaded ? chalk.green('✓') : chalk.dim('•');
+        const name = isRecommended ? chalk.bold.green(model.displayName) : chalk.white(model.displayName);
+        const tag = isRecommended ? chalk.green(' ⭐ RECOMMENDED') : '';
+        const dlTag = isDownloaded ? chalk.green(' [downloaded]') : '';
+
+        console.log(`  ${prefix} ${name}${tag}${dlTag}`);
+        console.log(chalk.dim(`     ${model.ramMB}MB  •  ${model.accuracy}% accuracy  •  ${model.speed}`));
+        console.log(chalk.dim(`     ${model.bestFor}`));
         console.log();
       }
-      console.log(chalk.dim('Switch model for one run:'));
-      console.log(chalk.cyan('  n0x run --model qwen2.5-coder:7b "refactor the auth module"'));
+
+      console.log(chalk.bold('Download a model:'));
+      console.log(chalk.cyan('  n0x setup\n'));
     });
 
   program
     .command('doctor')
-    .description('Check environment, LLM server, and tools')
+    .description('Check environment, model, and server status')
     .action(async () => {
+      const manager = new BonsaiManager(getN0xHome());
+      await manager.init();
+
       const config = await loadConfig();
-      const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+      const modelId = config.default_model;
+      const modelPath = (config as Record<string, unknown>).model_path as string | undefined;
 
-      checks.push({ name: 'Config', ok: true, detail: configPath() });
-      checks.push({
-        name: 'Bonsai model',
-        ok: LLMClient.isBonsaiModel(config.default_model),
-        detail: config.default_model,
-      });
+      const results = {
+        installation: true,
+        hardware: true,
+        model: {
+          exists: Boolean(modelPath && (await manager.hasModel(modelId))),
+          name: modelId,
+          path: modelPath,
+          ramMB: manager.getAllModels().find(m => m.id === modelId)?.ramMB,
+        },
+        server: {
+          running: await manager.isServerRunning(8080),
+          url: 'http://localhost:8080',
+        },
+        health: {
+          toolCalling: undefined as boolean | undefined,
+          codeGen: undefined as boolean | undefined,
+        },
+      };
 
-      // Probe both backends
-      console.log(chalk.dim('Probing backends...'));
-      const detected = await autoDetectBackend(config.base_url);
-      if (detected) {
-        const backendLabel = detected.type === 'ollama'
-          ? `Ollama at ${detected.url}`
-          : `llama-server at ${detected.url}`;
-        checks.push({
-          name: 'LLM backend',
-          ok: true,
-          detail: `${backendLabel} — model: ${detected.model ?? 'unknown'}`,
-        });
-
-        const smoke = await runToolCallSmokeTest(detected.url, detected.model ?? config.default_model, config.api_key);
-        checks.push({
-          name: 'Tool-call smoke test',
-          ok: smoke.ok,
-          detail: smoke.detail,
-        });
-
-        if (detected.type === 'ollama') {
-          checks.push({
-            name: 'Bonsai compatibility',
-            ok: false,
-            detail: 'Ollama + Bonsai is not recommended — Qwen3 template forces <think> tokens. Use llama-server.',
-          });
+      // Run smoke tests if server is running
+      if (results.server.running) {
+        try {
+          const smoke = await runToolCallSmokeTest(
+            'http://localhost:8080',
+            modelId,
+            'none',
+          );
+          results.health.toolCalling = smoke.ok;
+          results.health.codeGen = smoke.ok;
+        } catch {
+          results.health.toolCalling = false;
+          results.health.codeGen = false;
         }
-      } else {
-        checks.push({
-          name: 'LLM backend',
-          ok: false,
-          detail: 'No server found on :8080 or :11434. Start llama-server or run: ollama run hf.co/prism-ml/Bonsai-4B-gguf:Q1_0',
-        });
       }
 
-      checks.push({
-        name: 'ripgrep',
-        ok: await commandExists('rg'),
-        detail: (await commandExists('rg')) ? 'installed' : 'missing — install with: sudo apt install ripgrep',
-      });
-
-      if (config.sandbox_docker) {
-        const dockerOk = await isDockerAvailable();
-        checks.push({
-          name: 'Docker sandbox',
-          ok: dockerOk,
-          detail: dockerOk ? 'ready' : 'not running',
-        });
-      }
-
-      checks.push({
-        name: 'Tavily search',
-        ok: config.tavily_enabled,
-        detail: config.tavily_enabled
-          ? (config.tavily_api_key ? 'enabled (personal key)' : 'enabled (keyless mode)')
-          : 'disabled — set tavily_enabled = true in config to enable',
-      });
-
-      console.log(chalk.bold(`\n🌿 ${PRODUCT_NAME} doctor\n`));
-      let allOk = true;
-      for (const c of checks) {
-        console.log(`${c.ok ? chalk.green('✓') : chalk.red('✗')} ${c.name}: ${c.detail}`);
-        if (!c.ok) allOk = false;
-      }
-      console.log();
-      process.exit(allOk ? 0 : 1);
+      await showDoctorResults(results);
+      process.exit(results.installation && results.model.exists ? 0 : 1);
     });
 
   program
@@ -493,6 +505,37 @@ export function createCli(): Command {
     .action(async () => {
       console.log(configPath());
       console.log(JSON.stringify(await loadConfig(), null, 2));
+    });
+
+  program
+    .command('reflections')
+    .description('Show what the agent has learned from past failures')
+    .option('--stats', 'Show statistics only')
+    .action(async (opts: { stats?: boolean }) => {
+      const reflectionEngine = new ReflectionEngine(process.cwd());
+      await reflectionEngine.init();
+
+      const stats = reflectionEngine.getStats();
+
+      console.log(chalk.bold.cyan('\n🧠 Agent Learning & Reflections\n'));
+
+      if (opts.stats) {
+        console.log(`Total failures recorded: ${chalk.yellow(String(stats.totalFailures))}`);
+        console.log(`Most failed tool: ${chalk.red(stats.mostFailedTool)}`);
+        console.log(chalk.dim('\nUse: n0x reflections (without --stats) to see detailed reflections\n'));
+        return;
+      }
+
+      if (stats.totalFailures === 0) {
+        console.log(chalk.dim('No failures recorded yet. The agent will learn as it encounters errors.\n'));
+        return;
+      }
+
+      const summary = reflectionEngine.getRecentFailureSummary(10);
+      console.log(chalk.white(summary));
+
+      console.log(chalk.dim(`\nTotal learnings: ${stats.totalFailures}`));
+      console.log(chalk.dim(`Stored in: ${process.cwd()}/.n0x/reflections.jsonl\n`));
     });
 
   program
@@ -635,19 +678,52 @@ function printResult(result: Awaited<ReturnType<typeof runAgent>>): void {
   console.log(chalk.dim(`Steps: ${result.stepsUsed}`));
 }
 
-function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn('which', [cmd], { stdio: 'ignore' });
-    child.on('close', (code) => resolve(code === 0));
-    child.on('error', () => resolve(false));
-  });
-}
+// Removed - no longer used
 
 export function handleCliError(err: unknown): never {
   if (isN0xError(err)) process.stderr.write(chalk.red(formatError(err)) + '\n');
   else if (err instanceof Error) process.stderr.write(chalk.red(err.message) + '\n');
   else process.stderr.write(chalk.red(String(err)) + '\n');
   process.exit(1);
+}
+
+async function ensureServerRunning(manager: BonsaiManager): Promise<void> {
+  const config = await loadConfig();
+
+  // Check if server is alive
+  if (await manager.isServerRunning(8080)) {
+    return; // Already running
+  }
+
+  // Server not running, start it
+  console.log(chalk.dim('Starting model server...'));
+
+  // Get model path from config
+  const modelPath = (config as Record<string, unknown>).model_path as string | undefined;
+  if (!modelPath) {
+    showError(
+      'Model not configured',
+      'No model path found in configuration.',
+      ['Run: n0x setup', 'Download a model first'],
+    );
+    process.exit(1);
+  }
+
+  try {
+    await manager.startServer(modelPath, 8080);
+    console.log(chalk.green('✓ Server ready\n'));
+  } catch (error) {
+    showError(
+      'Server failed to start',
+      error instanceof Error ? error.message : String(error),
+      [
+        'Check if llama-server is installed: which llama-server',
+        'Install llama.cpp: brew install llama.cpp (macOS)',
+        'Re-run setup: n0x setup',
+      ],
+    );
+    process.exit(1);
+  }
 }
 
 async function runToolCallSmokeTest(

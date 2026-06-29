@@ -34,6 +34,10 @@ export async function ensureN0xHome(): Promise<string> {
   return home;
 }
 
+export async function hasConfig(): Promise<boolean> {
+  return existsSync(configPath());
+}
+
 const CONFIG_TEMPLATE = `# n0x — local-first coding agent
 # Docs: https://github.com/ixchio/n0x-cli
 #
