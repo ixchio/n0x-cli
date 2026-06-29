@@ -3,8 +3,8 @@ export const CLI_COMMAND = 'n0x';
 export const N0X_HOME_ENV = 'N0X_HOME';
 export const N0X_DATA_DIR = '.n0x';
 export const PROJECT_N0X_DIR = '.n0x';
-export const DEFAULT_BASE_URL = 'http://localhost:11434/v1'; // Ollama (easiest setup)
-export const DEFAULT_MODEL = 'qwen2.5-coder:3b'; // Best default for most laptops
+export const DEFAULT_BASE_URL = 'http://localhost:8080/v1'; // llama-cpp server (Bonsai)
+export const DEFAULT_MODEL = 'ternary-bonsai-4b'; // Best for 4GB+ RAM systems
 export const DEFAULT_MAX_STEPS = 20;
 
 /**

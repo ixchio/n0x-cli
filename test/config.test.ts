@@ -5,8 +5,8 @@ import { LLMClient } from '../src/llm/client.js';
 describe('configSchema', () => {
   it('applies defaults', () => {
     const cfg = configSchema.parse({});
-    expect(cfg.default_model).toBe('qwen2.5-coder:3b');
-    expect(cfg.base_url).toBe('http://localhost:11434/v1');
+    expect(cfg.default_model).toBe('ternary-bonsai-4b');
+    expect(cfg.base_url).toBe('http://localhost:8080/v1');
     expect(cfg.max_steps).toBe(20);
   });
 

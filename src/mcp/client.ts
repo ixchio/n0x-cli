@@ -7,6 +7,7 @@ import { mcpConfigPath } from '../config.js';
 import type { Tool, ToolResult } from '../tools/types.js';
 import { log } from '../lib/logger.js';
 import { truncate } from '../lib/output.js';
+import { sanitizeEnv } from '../lib/security.js';
 
 const mcpServerSchema = z.object({
   command: z.string(),
@@ -41,10 +42,14 @@ export async function connectMcpTools(): Promise<Tool[]> {
 
   for (const [serverName, serverConfig] of Object.entries(servers)) {
     try {
+      // SECURITY: Sanitize environment variables to prevent injection
+      const baseEnv = sanitizeEnv(process.env as Record<string, string>);
+      const customEnv = serverConfig.env ? sanitizeEnv(serverConfig.env) : {};
+
       const transport = new StdioClientTransport({
         command: serverConfig.command,
         args: serverConfig.args ?? [],
-        env: { ...process.env, ...serverConfig.env } as Record<string, string>,
+        env: { ...baseEnv, ...customEnv },
       });
       const client = new Client({ name: 'n0x', version: '0.1.0' }, { capabilities: {} });
       await client.connect(transport);

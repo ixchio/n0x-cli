@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { realpathSync, lstatSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { N0xError } from './errors.js';
 
@@ -19,6 +19,23 @@ export function resolveWithinWorkspace(
       'Use paths relative to the project directory.',
     );
   }
+
+  // SECURITY: Detect symlinks (potential security risk)
+  try {
+    const stats = lstatSync(target);
+    if (stats.isSymbolicLink()) {
+      throw new N0xError(
+        'PATH_DENIED',
+        `Symlinks are not allowed: ${userPath}`,
+        'For security reasons, n0x does not follow symbolic links.',
+      );
+    }
+  } catch (err) {
+    // File doesn't exist yet (e.g., Write operation) - that's okay
+    if (err instanceof N0xError) throw err;
+    // ENOENT is okay for new files
+  }
+
   return target;
 }
 

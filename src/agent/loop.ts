@@ -24,6 +24,8 @@ import {
 } from '../context/session.js';
 import { log } from '../lib/logger.js';
 import { truncate } from '../lib/output.js';
+import { SmartContextCompressor } from '../context/compressor.js';
+import { ReflectionEngine } from './reflection.js';
 
 export interface AgentCallbacks {
   onPlan?: (plan: string) => void;
@@ -61,6 +63,9 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
     stream = config.stream_output,
   } = opts;
   const llm = new LLMClient(config, signal);
+  const contextCompressor = new SmartContextCompressor();
+  const reflectionEngine = new ReflectionEngine(cwd);
+  await reflectionEngine.init();
 
   let tools = buildTools(config);
   const mcpTools = await connectMcpTools();
@@ -79,10 +84,10 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
     const plan = await createPlan(llm, goal, built.files, signal);
     callbacks?.onPlan?.(formatPlan(plan));
 
-    const messages: ChatMessage[] = [
+    let messages: ChatMessage[] = [
       {
         role: 'system',
-        content: buildSystemPrompt(memory, repoMap, built, plan, editMode),
+        content: buildSystemPrompt(memory, repoMap, built, plan, editMode, reflectionEngine),
       },
       { role: 'user', content: goal },
     ];
@@ -103,12 +108,18 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
 
       const onToken =
         stream && callbacks?.onToken ? (t: string) => callbacks.onToken!(t) : undefined;
-      
+
+      // Smart context management: compress if needed
       const charCount = JSON.stringify(messages).length;
       const budget = contextBudgetForModel(config.default_model);
-      if (charCount > budget * 0.8) {
+      const usage = charCount / budget;
+
+      if (usage > 0.7) {
+        // Compress context before it becomes a problem
+        log.info('Context compression triggered', { usage: `${Math.round(usage * 100)}%` });
+        messages = await contextCompressor.compressMessages(messages, budget);
         callbacks?.onWarning?.(
-          `Context window >80% full (${Math.round((charCount / budget) * 100)}%). Output may degrade.`
+          `🗜️ Context compressed to fit window (was ${Math.round(usage * 100)}%)`
         );
       }
 
@@ -121,11 +132,14 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
           for (const match of rawCalls) {
             try {
               const tc = JSON.parse(match[0]);
-              response.tool_calls.push({
-                id: `call_${Math.random().toString(36).substring(7)}`,
-                type: 'function',
-                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-              });
+              // Validate structure
+              if (tc && typeof tc === 'object' && tc.name && typeof tc.name === 'string') {
+                response.tool_calls.push({
+                  id: `call_${Math.random().toString(36).substring(7)}`,
+                  type: 'function',
+                  function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+                });
+              }
             } catch { /* ignore */ }
           }
           response.content = response.content.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}[\s\S]*?(?:<\/tool_call>)?/g, '').trim();
@@ -212,19 +226,82 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
         if (recentCallSigs.length > LOOP_WINDOW) recentCallSigs.shift();
         const repeats = recentCallSigs.filter((s) => s === sig).length;
         if (repeats >= LOOP_THRESHOLD) {
-          const hint = `Loop detected: you have called ${tc.function.name} with the same arguments ${repeats} times in the last ${LOOP_WINDOW} steps. Do NOT repeat this call. Change your approach: try a different tool, gather different context, or conclude with a partial answer starting with what you have observed.`;
-          callbacks?.onWarning?.(hint);
-          messages.push({ role: 'user', content: `[system] ${hint}` });
+          // FORCE strategy change - don't just warn, inject strong system override
+          const forceMessage = `🚨 LOOP DETECTED - MANDATORY STRATEGY CHANGE REQUIRED 🚨
+
+You have called ${tc.function.name}(${JSON.stringify(args)}) ${repeats} times with IDENTICAL arguments in the last ${LOOP_WINDOW} steps.
+
+This approach is NOT WORKING. You MUST:
+1. Stop calling ${tc.function.name} with these arguments
+2. Try a COMPLETELY DIFFERENT approach
+3. Use a DIFFERENT tool or DIFFERENT arguments
+4. If truly stuck, summarize what you learned and state "DONE" with current findings
+
+DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
+
+          callbacks?.onWarning?.(
+            `⚠️ Loop detected: ${tc.function.name} called ${repeats}x - forcing strategy change`
+          );
+
+          // Inject as high-priority system message
+          messages.push({
+            role: 'user',
+            content: forceMessage
+          });
+
+          log.warn('Loop prevention triggered', {
+            tool: tc.function.name,
+            repeats,
+            args: JSON.stringify(args).slice(0, 100)
+          });
+
+          // Skip this tool call and force re-planning
           break;
         }
 
         const tool = getToolByName(tools, tc.function.name);
+
+        // Check if we've failed this before (learning from past mistakes)
+        const pastCheck = reflectionEngine.checkPastMistakes(tc.function.name, args!);
+        if (pastCheck.shouldWarn) {
+          callbacks?.onWarning?.(pastCheck.advice);
+          // Inject warning into conversation so agent sees it
+          messages.push({
+            role: 'user',
+            content: `[reflection] ${pastCheck.advice}`,
+          });
+        }
 
         callbacks?.onToolStart?.(tc.function.name, JSON.stringify(args).slice(0, 160));
 
         const result = tool
           ? await executeTool(tool, args!, ctx)
           : { output: `Unknown tool: ${tc.function.name}`, isError: true };
+
+        // If tool failed, reflect on WHY and learn from it
+        if (result.isError) {
+          log.warn('Tool execution failed', {
+            tool: tc.function.name,
+            error: result.output.slice(0, 200),
+          });
+
+          // Get AI reflection on this failure
+          const reflection = await reflectionEngine.reflectOnFailure(
+            llm,
+            stepsUsed,
+            tc.function.name,
+            args!,
+            result.output,
+            goal,
+          );
+
+          // Inject reflection into conversation
+          callbacks?.onWarning?.(` Reflection: ${reflection}`);
+          messages.push({
+            role: 'user',
+            content: `[reflection] ${reflection}\nNow try a different approach.`,
+          });
+        }
 
         advancePlan(plan, tc.function.name, !result.isError);
 
@@ -262,6 +339,7 @@ function buildSystemPrompt(
   built: Awaited<ReturnType<typeof buildAgentContext>>,
   plan: PlanStep[],
   editMode: EditMode,
+  reflectionEngine: ReflectionEngine,
 ): string {
   const mem = memoryToPrompt(memory);
   const modeNote =
@@ -269,10 +347,14 @@ function buildSystemPrompt(
       ? '\n## Mode\nDRY RUN — preview diffs only; changes are NOT written to disk.'
       : '\n## Mode\nAPPLY — file edits are written to disk.';
 
+  // Add recent learnings from failures
+  const learnings = reflectionEngine.getRecentFailureSummary(5);
+
   return [
     SYSTEM_PROMPT,
     modeNote,
     mem && `\n## Memory\n${mem}`,
+    learnings && `\n## Learnings from Past Failures\n${learnings}\n⚠️ Avoid repeating these mistakes!`,
     built.session && `\n## Session\n${built.session}`,
     `\n## Repository\n${formatRepoMap(repoMap)}`,
     `\n## Symbol index\n${built.symbols}`,
