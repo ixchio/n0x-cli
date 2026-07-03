@@ -6,10 +6,16 @@ import { spawn, type ChildProcess } from 'child_process';
 import { mkdir, access } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { platform } from 'os';
+import { platform, arch } from 'os';
 import { ModelDownloader } from './downloader.js';
 import { BONSAI_MODELS, detectRAMTier, getModelById, type BonsaiModel } from './models.js';
 import { log } from '../lib/logger.js';
+import { createWriteStream } from 'fs';
+import { pipeline } from 'stream/promises';
+import { chmod, unlink } from 'fs/promises';
+import AdmZip from 'adm-zip';
+
+const LLAMA_CPP_VERSION = 'b4086';
 
 export class BonsaiManager {
   private llamaServer?: ChildProcess;
@@ -79,6 +85,52 @@ export class BonsaiManager {
   }
 
   /**
+   * Download and extract llama-server for current platform if missing
+   */
+  async ensureLlamaServer(): Promise<string> {
+    const existingPath = await this.getLlamaServerPath();
+    if (existingPath) return existingPath;
+
+    const plat = platform();
+    const a = arch();
+    let url = '';
+
+    if (plat === 'darwin' && a === 'x64') url = `https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/llama-${LLAMA_CPP_VERSION}-bin-macos-x64.zip`;
+    else if (plat === 'darwin' && a === 'arm64') url = `https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/llama-${LLAMA_CPP_VERSION}-bin-macos-arm64.zip`;
+    else if (plat === 'linux' && a === 'x64') url = `https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/llama-${LLAMA_CPP_VERSION}-bin-ubuntu-x64.zip`;
+    else if (plat === 'linux' && a === 'arm64') url = `https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.zip`;
+    else if (plat === 'win32' && a === 'x64') url = `https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/llama-${LLAMA_CPP_VERSION}-bin-win-cuda-cu12.2.0-x64.zip`;
+    else throw new Error(`Unsupported platform for auto-download: ${plat}-${a}. Please install llama.cpp manually.`);
+
+    let binaryName = 'llama-server';
+    if (plat === 'win32') binaryName += '.exe';
+
+    const targetPath = join(this.binDir, binaryName);
+    const tempPath = targetPath + '.zip';
+
+    log.info(`Downloading llama-server ${LLAMA_CPP_VERSION}...`);
+    console.log(`\n📦 Downloading llama-server (latest)...`);
+    
+    const response = await fetch(url);
+    if (!response.ok || !response.body) throw new Error(`Download failed: HTTP ${response.status}`);
+    
+    const fileStream = createWriteStream(tempPath);
+    await pipeline(response.body, fileStream);
+
+    const zip = new AdmZip(tempPath);
+    const entries = zip.getEntries();
+    const serverEntry = entries.find(e => e.entryName.includes('llama-server') || e.entryName.includes('server'));
+    if (!serverEntry) throw new Error('llama-server not found in archive');
+
+    zip.extractEntryTo(serverEntry, this.binDir, false, true, false, binaryName);
+
+    if (plat !== 'win32') await chmod(targetPath, 0o755);
+    await unlink(tempPath);
+
+    return targetPath;
+  }
+
+  /**
    * Get path to llama-server binary
    */
   async getLlamaServerPath(): Promise<string | null> {
@@ -107,15 +159,7 @@ export class BonsaiManager {
    * Start llama.cpp server
    */
   async startServer(modelPath: string, port: number = 8080): Promise<void> {
-    const llamaServerPath = await this.getLlamaServerPath();
-
-    if (!llamaServerPath) {
-      throw new Error(
-        'llama-server not found. Please install llama.cpp:\n' +
-        '  macOS: brew install llama.cpp\n' +
-        '  Linux: Download from https://github.com/ggerganov/llama.cpp/releases',
-      );
-    }
+    const llamaServerPath = await this.ensureLlamaServer();
 
     this.serverPort = port;
 
