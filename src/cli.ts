@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { resolve } from 'node:path';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
 import {
   loadConfig,
   writeDefaultConfig,
@@ -9,6 +9,7 @@ import {
   getN0xHome,
   mcpConfigPath,
   hasConfig,
+  usesManagedLlamaServer,
 } from './config.js';
 import { BonsaiManager } from './setup/manager.js';
 import { firstRunSetup, interactiveModelSetup } from './setup/first-run.js';
@@ -32,20 +33,278 @@ import {
 import type { EditMode } from './tools/types.js';
 import { createTerminalMarkdownStream, TerminalMarkdownStream } from 'markstream-cli';
 import { autoDetectBackend } from './llm/detect.js';
+import type { N0xConfig } from './config/schema.js';
+import {
+  createCheckpoint,
+  listCheckpoints,
+  restoreCheckpoint,
+  type CheckpointManifest,
+} from './lib/checkpoint.js';
+import { RunStatusLine } from './lib/run-status.js';
 
 const VERSION = '0.5.0'; // Bonsai UX release
 
-function createAbortController(): AbortController {
+type CliAbortController = AbortController & { dispose: () => void };
+
+function createAbortController(): CliAbortController {
   const ac = new AbortController();
-  process.on('SIGINT', () => {
+  const onSigint = () => {
     process.stderr.write(chalk.yellow('\n\nInterrupted. Finishing current step...\n'));
     ac.abort();
+  };
+  process.on('SIGINT', onSigint);
+  return Object.assign(ac, {
+    dispose: () => process.off('SIGINT', onSigint),
   });
-  return ac;
 }
 
 async function assertWorkspace(cwd: string): Promise<void> {
   await access(cwd);
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getConfiguredPort(baseUrl: string, fallback: number): number {
+  try {
+    const url = new URL(baseUrl);
+    return url.port ? Number(url.port) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function isOpenAiBackendRunning(config: N0xConfig): Promise<boolean> {
+  return (await fetchOpenAiModels(config)).ok;
+}
+
+async function fetchOpenAiModels(config: N0xConfig): Promise<{
+  ok: boolean;
+  models: string[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`${config.base_url}/models`, {
+      signal: AbortSignal.timeout(2000),
+      headers: { Authorization: `Bearer ${config.api_key}` },
+    });
+    if (!res.ok) return { ok: false, models: [], error: `HTTP ${res.status}` };
+
+    const data = (await res.json()) as { data?: Array<{ id: string }> };
+    return { ok: true, models: data.data?.map((m) => m.id).filter(Boolean) ?? [] };
+  } catch {
+    return { ok: false, models: [] };
+  }
+}
+
+function backendForUseInput(input: string, url: string): N0xConfig['backend'] {
+  const normalized = input.toLowerCase();
+  if (normalized === 'ollama') return 'ollama';
+  if (normalized === 'llama-server' || normalized === 'llama') return 'llama-cpp';
+
+  try {
+    const parsed = new URL(url);
+    const isLocalhost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (isLocalhost && parsed.port === '11434') return 'ollama';
+    if (isLocalhost && parsed.port === '8080') return 'llama-cpp';
+  } catch {
+    // Leave validation to the config schema on the next load.
+  }
+
+  return 'openai-compatible';
+}
+
+function upsertTomlString(raw: string, key: string, value: string): string {
+  const line = `${key} = ${JSON.stringify(value)}`;
+  const assignmentPattern = new RegExp(`^\\s*${key}\\s*=\\s*.*(?:\\r?\\n)?`, 'gm');
+  const withoutExistingAssignments = raw.replace(assignmentPattern, '');
+  const trimmed = withoutExistingAssignments.replace(/\s*$/, '');
+  return `${trimmed}${trimmed ? '\n' : ''}${line}\n`;
+}
+
+async function writeBackendConfig(url: string, backend: N0xConfig['backend']): Promise<void> {
+  await writeDefaultConfig();
+  let raw = await readFile(configPath(), 'utf8').catch(() => '');
+  raw = upsertTomlString(raw, 'base_url', url);
+  raw = upsertTomlString(raw, 'backend', backend);
+  await writeFile(configPath(), raw, 'utf8');
+}
+
+async function ensureBackendReady(config: N0xConfig): Promise<void> {
+  const manager = new BonsaiManager(getN0xHome());
+  await manager.init();
+
+  if (usesManagedLlamaServer(config)) {
+    await ensureServerRunning(manager, config);
+    return;
+  }
+
+  if (await isOpenAiBackendRunning(config)) return;
+
+  const suggestions = config.backend === 'ollama'
+    ? [
+        'Start Ollama: ollama serve',
+        `Pull/run the model: ollama run ${config.default_model}`,
+        'Or switch back: n0x use llama-server',
+      ]
+    : [
+        'Check base_url in ~/.n0x/config.toml',
+        'Check api_key if this endpoint requires one',
+        'Run: n0x doctor',
+      ];
+
+  showError(
+    'Backend unavailable',
+    `Cannot reach ${config.backend} backend at ${config.base_url}.`,
+    suggestions,
+  );
+  process.exit(1);
+}
+
+async function applyModelOverride(config: N0xConfig, model: string): Promise<void> {
+  config.default_model = model;
+  if (!LLMClient.isBonsaiModel(model) && usesManagedLlamaServer(config)) {
+    const detected = await autoDetectBackend(config.base_url);
+    if (detected?.type === 'ollama') {
+      config.base_url = detected.url;
+    } else {
+      config.base_url = 'http://localhost:11434/v1';
+    }
+    config.backend = 'ollama';
+  }
+}
+
+function printChatHelp(): void {
+  console.log(chalk.bold('\nCommands'));
+  console.log(chalk.dim('  /help           Show commands'));
+  console.log(chalk.dim('  /status         Show model, backend, cwd, and mode'));
+  console.log(chalk.dim('  /model <name>   Switch model for this chat session'));
+  console.log(chalk.dim('  /memory         Show project memory'));
+  console.log(chalk.dim('  /checkpoint     Create a restore point'));
+  console.log(chalk.dim('  /checkpoints    List restore points'));
+  console.log(chalk.dim('  /restore <id>   Restore a checkpoint'));
+  console.log(chalk.dim('  /clear          Clear the terminal'));
+  console.log(chalk.dim('  /exit           Quit chat\n'));
+}
+
+function printChatStatus(config: N0xConfig, cwd: string, dry?: boolean): void {
+  console.log(chalk.bold('\nStatus'));
+  console.log(chalk.dim(`  Model:   ${config.default_model}`));
+  console.log(chalk.dim(`  Backend: ${config.backend} at ${config.base_url}`));
+  console.log(chalk.dim(`  Mode:    ${dry ? 'DRY' : 'APPLY'}`));
+  console.log(chalk.dim(`  Stream:  ${config.stream_output ? 'ON' : 'OFF'}`));
+  console.log(chalk.dim(`  CWD:     ${cwd}\n`));
+}
+
+async function handleChatCommand(
+  line: string,
+  config: N0xConfig,
+  cwd: string,
+  dry?: boolean,
+): Promise<boolean> {
+  const [command, ...args] = line.slice(1).trim().split(/\s+/);
+  switch (command) {
+    case 'help':
+    case '?':
+      printChatHelp();
+      return true;
+    case 'status':
+      printChatStatus(config, cwd, dry);
+      return true;
+    case 'model': {
+      const model = args.join(' ').trim();
+      if (!model) {
+        console.log(chalk.yellow('Usage: /model <name>'));
+        return true;
+      }
+      await applyModelOverride(config, model);
+      await ensureBackendReady(config);
+      console.log(chalk.green(`Model switched to ${config.default_model}`));
+      console.log(chalk.dim(`Backend: ${config.backend} at ${config.base_url}\n`));
+      return true;
+    }
+    case 'memory':
+      console.log(JSON.stringify(await loadMemory(), null, 2));
+      return true;
+    case 'clear':
+      console.clear();
+      return true;
+    case 'checkpoint': {
+      const reason = args.join(' ').trim() || 'manual chat checkpoint';
+      const checkpoint = await createCheckpoint(cwd, reason);
+      console.log(chalk.green(`Checkpoint created: ${checkpoint.id}`));
+      console.log(chalk.dim(`Files: ${checkpoint.files.length}, skipped: ${checkpoint.skipped.length}\n`));
+      return true;
+    }
+    case 'checkpoints':
+      printCheckpointList(await listCheckpoints(cwd));
+      return true;
+    case 'restore': {
+      const id = args[0] ?? 'latest';
+      if (!(await confirmRestore(id))) return true;
+      const result = await restoreCheckpoint(cwd, id);
+      console.log(chalk.green(`Restored checkpoint ${result.id}`));
+      console.log(chalk.dim(`Restored: ${result.restored}, removed: ${result.removed}, skipped: ${result.skipped}\n`));
+      return true;
+    }
+    case 'exit':
+    case 'quit':
+    case 'q':
+      return false;
+    default:
+      console.log(chalk.yellow(`Unknown command: /${command}`));
+      console.log(chalk.dim('Run /help for available commands.\n'));
+      return true;
+  }
+}
+
+async function confirmRestore(id: string): Promise<boolean> {
+  const { confirmAction } = await import('./lib/prompt.js');
+  console.log(chalk.yellow(`Restore checkpoint ${id}? Current workspace changes may be overwritten.`));
+  return confirmAction('Continue?');
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function printCheckpointList(checkpoints: CheckpointManifest[]): void {
+  if (checkpoints.length === 0) {
+    console.log(chalk.yellow('No checkpoints found.'));
+    return;
+  }
+
+  console.log(chalk.bold('\nCheckpoints'));
+  for (const checkpoint of checkpoints.slice(0, 20)) {
+    console.log(chalk.cyan(`  ${checkpoint.id}`));
+    console.log(chalk.dim(`    ${checkpoint.createdAt}  ${checkpoint.files.length} files  ${formatBytes(checkpoint.totalBytes)}`));
+    console.log(chalk.dim(`    ${checkpoint.reason}`));
+  }
+  console.log();
+}
+
+async function createRunCheckpoint(
+  cwd: string,
+  goal: string,
+  editMode: EditMode,
+): Promise<CheckpointManifest | undefined> {
+  if (editMode === 'dry') return undefined;
+  console.log(chalk.dim('Creating checkpoint...'));
+  const checkpoint = await createCheckpoint(cwd, `before run: ${goal.slice(0, 120)}`);
+  console.log(chalk.dim(`Checkpoint: ${checkpoint.id} (${checkpoint.files.length} files, ${formatBytes(checkpoint.totalBytes)})`));
+  if (checkpoint.skipped.length > 0) {
+    console.log(chalk.yellow(`Skipped ${checkpoint.skipped.length} large files. They will not be restored from this checkpoint.`));
+  }
+  console.log();
+  return checkpoint;
 }
 
 async function runAgentCommand(opts: {
@@ -57,45 +316,56 @@ async function runAgentCommand(opts: {
   apply?: boolean;
   interactive?: boolean;
   stream?: boolean;
+  lowMemory?: boolean;
 }): Promise<void> {
   const config = await loadConfig();
 
-  // Allow --model flag or env override to switch model on the fly
+  // Allow --model flag to switch model on the fly.
   if (opts.model) {
-    config.default_model = opts.model;
-    // If user explicitly sets a model, update base_url to match expected backend
-    if (!opts.model.includes('bonsai')) {
-      const detected = await autoDetectBackend(config.base_url);
-      if (!detected) {
-        // Fallback: assume Ollama if no backend found and non-bonsai model requested
-        config.base_url = 'http://localhost:11434/v1';
-      }
-    }
+    await applyModelOverride(config, opts.model);
   }
 
   const cwd = resolve(opts.cwd);
   await assertWorkspace(cwd);
   if (opts.maxSteps) config.max_steps = opts.maxSteps;
   if (opts.stream === false) config.stream_output = false;
+  if (opts.lowMemory) {
+    config.stream_output = false;
+    config.max_steps = Math.min(config.max_steps, 10);
+    config.tavily_enabled = false;
+    console.log(chalk.yellow('Low memory mode enabled'));
+    console.log(chalk.dim('  - Streaming: OFF'));
+    console.log(chalk.dim(`  - Max steps: ${config.max_steps}`));
+    console.log(chalk.dim('  - Web search: OFF\n'));
+  }
 
   let editMode: EditMode = 'apply';
   if (opts.dry) editMode = 'dry';
   else if (opts.interactive) editMode = 'interactive';
   else if (opts.apply) editMode = 'apply';
 
-  await printBanner(config, cwd, opts.goal, editMode);
+  await ensureBackendReady(config);
+  const checkpoint = await createRunCheckpoint(cwd, opts.goal, editMode);
+  await printBanner(config, cwd, opts.goal, editMode, checkpoint?.id);
   await checkSandbox(config);
+  const ui = createCliRunUi(config, cwd, editMode, checkpoint?.id, config.stream_output);
 
   const ac = createAbortController();
-  const result = await runAgent({
-    goal: opts.goal.trim(),
-    cwd,
-    config,
-    signal: ac.signal,
-    editMode,
-    stream: config.stream_output,
-    callbacks: cliCallbacks(config.stream_output),
-  });
+  let result: Awaited<ReturnType<typeof runAgent>>;
+  try {
+    result = await runAgent({
+      goal: opts.goal.trim(),
+      cwd,
+      config,
+      signal: ac.signal,
+      editMode,
+      stream: config.stream_output,
+      callbacks: ui.callbacks,
+    });
+  } finally {
+    ui.stop();
+    ac.dispose();
+  }
 
   printResult(result);
   process.exit(result.completed ? 0 : 1);
@@ -135,7 +405,7 @@ export function createCli(): Command {
       dry?: boolean;
       apply?: boolean;
       interactive?: boolean;
-      noStream?: boolean;
+      stream?: boolean;
       lowMemory?: boolean;
     }) => {
       const userGoal = opts.prompt ?? goal;
@@ -147,23 +417,6 @@ export function createCli(): Command {
         await firstRunSetup();
       }
 
-      // Ensure server is running
-      const manager = new BonsaiManager(getN0xHome());
-      await manager.init();
-      await ensureServerRunning(manager);
-
-      // Low memory mode
-      const config = await loadConfig();
-      if (opts.lowMemory) {
-        config.stream_output = false;
-        config.max_steps = Math.min(config.max_steps, 10);
-        config.tavily_enabled = false;
-        console.log(chalk.yellow('🔋 Low memory mode enabled'));
-        console.log(chalk.dim('  - Streaming: OFF'));
-        console.log(chalk.dim('  - Max steps: 10'));
-        console.log(chalk.dim('  - Web search: OFF\n'));
-      }
-
       await runAgentCommand({
         goal: userGoal,
         cwd: opts.cwd,
@@ -172,7 +425,8 @@ export function createCli(): Command {
         dry: opts.dry,
         apply: opts.apply,
         interactive: opts.interactive,
-        stream: opts.noStream ? false : undefined,
+        stream: opts.stream === false ? false : undefined,
+        lowMemory: opts.lowMemory,
       });
     });
 
@@ -182,10 +436,11 @@ export function createCli(): Command {
     .argument('<file>', 'File path')
     .option('-C, --cwd <dir>', 'Working directory', process.cwd())
     .option('--no-stream', 'Disable streaming')
-    .action(async (file: string, opts: { cwd: string; noStream?: boolean }) => {
+    .action(async (file: string, opts: { cwd: string; stream?: boolean }) => {
       const content = await readFile(resolve(opts.cwd, file), 'utf8').catch(() => null);
       if (!content) throw new Error(`Cannot read file: ${file}`);
       const config = await loadConfig();
+      await ensureBackendReady(config);
       const llm = new LLMClient(config);
       const messages = [
         { role: 'system' as const, content: 'You are an expert programmer. Explain what the provided file does concisely and structurally. Do not output code unless necessary.' },
@@ -193,10 +448,10 @@ export function createCli(): Command {
       ];
       
       console.log(chalk.bold.green(`\n🌿 ${PRODUCT_NAME} explain: ${file}\n`));
-      const onToken = opts.noStream ? undefined : (t: string) => process.stdout.write(chalk.cyan(t));
+      const onToken = opts.stream === false ? undefined : (t: string) => process.stdout.write(chalk.cyan(t));
       const res = await llm.chat(messages, undefined, onToken);
       
-      if (opts.noStream && res.content) {
+      if (opts.stream === false && res.content) {
         console.log(chalk.cyan(res.content));
       }
       console.log();
@@ -224,6 +479,7 @@ export function createCli(): Command {
       }
 
       const config = await loadConfig();
+      await ensureBackendReady(config);
       const llm = new LLMClient(config);
       const messages = [
         { role: 'system' as const, content: 'Write a conventional commit message for this diff. Output ONLY the message, one line, no backticks, no markdown.' },
@@ -280,31 +536,53 @@ export function createCli(): Command {
       const config = await loadConfig();
       const cwd = resolve(opts.cwd);
       await assertWorkspace(cwd);
+      await ensureBackendReady(config);
 
       const { createInterface } = await import('node:readline');
       const rl = createInterface({ input: process.stdin, output: process.stdout });
 
       console.log(chalk.bold.green(`\n🌿 ${PRODUCT_NAME} interactive`));
-      console.log(chalk.dim(`Model: ${config.default_model} | ${opts.dry ? 'DRY' : 'APPLY'} | exit to quit\n`));
+      console.log(chalk.dim(`Model: ${config.default_model} | Backend: ${config.backend} | ${opts.dry ? 'DRY' : 'APPLY'}`));
+      console.log(chalk.dim('Run /help for commands, /exit to quit.\n'));
 
       const prompt = (): void => {
-        rl.question(chalk.cyan('you> '), async (line) => {
+        rl.question(chalk.cyan('n0x> '), async (line) => {
           const trimmed = line.trim();
-          if (!trimmed || trimmed === 'exit' || trimmed === 'quit') {
+          if (!trimmed) {
+            prompt();
+            return;
+          }
+          if (trimmed === 'exit' || trimmed === 'quit') {
             rl.close();
             return;
           }
+          if (trimmed.startsWith('/')) {
+            if (await handleChatCommand(trimmed, config, cwd, opts.dry)) {
+              prompt();
+            } else {
+              rl.close();
+            }
+            return;
+          }
           const ac = createAbortController();
-          const result = await runAgent({
-            goal: trimmed,
-            cwd,
-            config,
-            signal: ac.signal,
-            editMode: opts.dry ? 'dry' : 'apply',
-            callbacks: cliCallbacks(config.stream_output),
-          });
-          printResult(result);
-          console.log();
+          const editMode: EditMode = opts.dry ? 'dry' : 'apply';
+          const checkpoint = await createRunCheckpoint(cwd, trimmed, editMode);
+          const ui = createCliRunUi(config, cwd, editMode, checkpoint?.id, config.stream_output);
+          try {
+            const result = await runAgent({
+              goal: trimmed,
+              cwd,
+              config,
+              signal: ac.signal,
+              editMode,
+              callbacks: ui.callbacks,
+            });
+            printResult(result);
+            console.log();
+          } finally {
+            ui.stop();
+            ac.dispose();
+          }
           prompt();
         });
       };
@@ -424,20 +702,33 @@ export function createCli(): Command {
 
       const config = await loadConfig();
       const modelId = config.default_model;
-      const modelPath = (config as Record<string, unknown>).model_path as string | undefined;
+      const managedLlama = usesManagedLlamaServer(config);
+      const modelPath = managedLlama
+        ? config.model_path ?? manager.getModelPath(modelId) ?? undefined
+        : undefined;
+      const remoteModels = managedLlama ? undefined : await fetchOpenAiModels(config);
+      const modelExists = managedLlama
+        ? modelPath ? await fileExists(modelPath) : await manager.hasModel(modelId)
+        : Boolean(remoteModels?.ok && remoteModels.models.includes(modelId));
+      const serverPort = getConfiguredPort(config.base_url, 8080);
+      const serverRunning = managedLlama
+        ? await manager.isServerRunning(serverPort)
+        : Boolean(remoteModels?.ok);
 
       const results = {
         installation: true,
         hardware: true,
         model: {
-          exists: Boolean(modelPath && (await manager.hasModel(modelId))),
+          exists: modelExists,
           name: modelId,
           path: modelPath,
+          backend: config.backend,
+          available: remoteModels?.models,
           ramMB: manager.getAllModels().find(m => m.id === modelId)?.ramMB,
         },
         server: {
-          running: await manager.isServerRunning(8080),
-          url: 'http://localhost:8080',
+          running: serverRunning,
+          url: config.base_url,
         },
         health: {
           toolCalling: undefined as boolean | undefined,
@@ -449,9 +740,9 @@ export function createCli(): Command {
       if (results.server.running) {
         try {
           const smoke = await runToolCallSmokeTest(
-            'http://localhost:8080',
+            config.base_url,
             modelId,
-            'none',
+            config.api_key,
           );
           results.health.toolCalling = smoke.ok;
           results.health.codeGen = smoke.ok;
@@ -462,7 +753,9 @@ export function createCli(): Command {
       }
 
       await showDoctorResults(results);
-      process.exit(results.installation && results.model.exists ? 0 : 1);
+      const healthOk = results.health.toolCalling === undefined
+        || (results.health.toolCalling && results.health.codeGen);
+      process.exit(results.installation && results.model.exists && healthOk ? 0 : 1);
     });
 
   program
@@ -497,6 +790,50 @@ export function createCli(): Command {
       } else {
         console.log(JSON.stringify(await loadMemory(), null, 2));
       }
+    });
+
+  program
+    .command('checkpoint')
+    .description('Create a workspace checkpoint')
+    .argument('[label]', 'Why this checkpoint exists', 'manual checkpoint')
+    .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .action(async (label: string, opts: { cwd: string }) => {
+      const cwd = resolve(opts.cwd);
+      await assertWorkspace(cwd);
+      const checkpoint = await createCheckpoint(cwd, label);
+      console.log(chalk.green(`Checkpoint created: ${checkpoint.id}`));
+      console.log(chalk.dim(`Files: ${checkpoint.files.length}`));
+      console.log(chalk.dim(`Size: ${formatBytes(checkpoint.totalBytes)}`));
+      if (checkpoint.skipped.length > 0) {
+        console.log(chalk.yellow(`Skipped: ${checkpoint.skipped.length} large files`));
+      }
+    });
+
+  program
+    .command('checkpoints')
+    .description('List workspace checkpoints')
+    .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .action(async (opts: { cwd: string }) => {
+      const cwd = resolve(opts.cwd);
+      await assertWorkspace(cwd);
+      printCheckpointList(await listCheckpoints(cwd));
+    });
+
+  program
+    .command('restore')
+    .description('Restore a checkpoint')
+    .argument('[id]', 'Checkpoint id, or "latest"', 'latest')
+    .option('-C, --cwd <dir>', 'Working directory', process.cwd())
+    .option('-f, --force', 'Do not ask for confirmation')
+    .action(async (id: string, opts: { cwd: string; force?: boolean }) => {
+      const cwd = resolve(opts.cwd);
+      await assertWorkspace(cwd);
+      if (!opts.force && !(await confirmRestore(id))) return;
+      const result = await restoreCheckpoint(cwd, id);
+      console.log(chalk.green(`Restored checkpoint ${result.id}`));
+      console.log(chalk.dim(`Restored: ${result.restored}`));
+      console.log(chalk.dim(`Removed: ${result.removed}`));
+      console.log(chalk.dim(`Skipped: ${result.skipped}`));
     });
 
   program
@@ -556,9 +893,9 @@ export function createCli(): Command {
         }
         console.log(chalk.green(`✓ Detected: ${detected.type} at ${detected.url}`));
         if (detected.model) console.log(chalk.dim(`  Model: ${detected.model}`));
-        console.log(chalk.dim('\nThis session will use the detected backend automatically.'));
-        console.log(chalk.dim(`To make it permanent, set in ~/.n0x/config.toml:`));
-        console.log(chalk.cyan(`  base_url = "${detected.url}"`));
+        await writeBackendConfig(detected.url, 'auto');
+        console.log(chalk.green(`✓ Config updated: backend = "auto", base_url = "${detected.url}"`));
+        console.log(chalk.dim(`Run 'n0x doctor' to verify.`));
         return;
       }
 
@@ -578,23 +915,9 @@ export function createCli(): Command {
         console.log(chalk.green(`✓ ${detected.type} is live at ${url}`));
       }
 
-      const configFile = configPath();
-      const raw = await readFile(configFile, 'utf8').catch(() => '');
-      const updated = raw.replace(
-        /^base_url\s*=\s*.+$/m,
-        `base_url = "${url}"`,
-      );
-      if (updated === raw) {
-        // Not found — append
-        await import('node:fs/promises').then(({ appendFile }) =>
-          appendFile(configFile, `\nbase_url = "${url}"\n`)
-        );
-      } else {
-        await import('node:fs/promises').then(({ writeFile: wf }) =>
-          wf(configFile, updated, 'utf8')
-        );
-      }
-      console.log(chalk.green(`✓ Config updated: base_url = "${url}"`));
+      const configBackend = backendForUseInput(backend, url);
+      await writeBackendConfig(url, configBackend);
+      console.log(chalk.green(`✓ Config updated: backend = "${configBackend}", base_url = "${url}"`));
       console.log(chalk.dim(`Run 'n0x doctor' to verify.`));
     });
 
@@ -609,12 +932,15 @@ async function printBanner(
   cwd: string,
   goal: string,
   editMode: EditMode,
+  checkpointId?: string,
 ): Promise<void> {
-  console.log(chalk.bold.green(`\n🌿 ${PRODUCT_NAME}\n`));
-  console.log(chalk.dim(`Model: ${config.default_model} | Mode: ${editMode.toUpperCase()} | Max steps: ${config.max_steps}`));
-  console.log(chalk.dim(`Server: ${config.base_url}`));
-  console.log(chalk.dim(`CWD: ${cwd}\n`));
-  console.log(chalk.yellow(`Goal: ${goal}\n`));
+  console.log(chalk.bold(`\n${PRODUCT_NAME}`));
+  console.log(chalk.dim(`model ${config.default_model}`));
+  console.log(chalk.dim(`backend ${config.backend} at ${config.base_url}`));
+  console.log(chalk.dim(`mode ${editMode.toUpperCase()}  steps ${config.max_steps}`));
+  if (checkpointId) console.log(chalk.dim(`checkpoint ${checkpointId}`));
+  console.log(chalk.dim(`cwd ${cwd}`));
+  console.log(chalk.white(`\n${goal}\n`));
 }
 
 async function checkSandbox(config: Awaited<ReturnType<typeof loadConfig>>): Promise<void> {
@@ -624,11 +950,26 @@ async function checkSandbox(config: Awaited<ReturnType<typeof loadConfig>>): Pro
   }
 }
 
-function cliCallbacks(stream: boolean) {
+function createCliRunUi(
+  config: N0xConfig,
+  cwd: string,
+  editMode: EditMode,
+  checkpointId: string | undefined,
+  stream: boolean,
+) {
   let mdStream: TerminalMarkdownStream | null = null;
+  const status = new RunStatusLine({
+    model: config.default_model,
+    backend: config.backend,
+    mode: editMode.toUpperCase(),
+    cwd,
+    maxSteps: config.max_steps,
+    checkpointId,
+  });
 
   const ensureMdStream = () => {
     if (!mdStream && stream) {
+      status.clear();
       mdStream = createTerminalMarkdownStream({
         loadingIndicator: { text: 'Thinking...' },
         startOnNewLine: true
@@ -646,30 +987,61 @@ function cliCallbacks(stream: boolean) {
   };
 
   return {
-    onPlan: (p: string) => {
-      stopMdStream();
-      console.log(chalk.blue('\nPlan:\n') + p + '\n');
+    callbacks: {
+      onPlan: (p: string) => {
+        stopMdStream();
+        status.log(`${chalk.bold('\nPlan')}\n${chalk.dim(p)}\n`);
+        status.update({ phase: 'thinking' });
+      },
+      onStep: (s: {
+        step: number;
+        maxSteps: number;
+        contextPercent: number;
+        approxTokens: number;
+      }) => {
+        status.update({
+          phase: 'thinking',
+          step: s.step,
+          maxSteps: s.maxSteps,
+          contextPercent: s.contextPercent,
+          approxTokens: s.approxTokens,
+          tool: '',
+        });
+      },
+      onThought: (t: string) => {
+        stopMdStream();
+        if (!stream) status.log(`${chalk.dim('\nThought')}\n${chalk.cyan(t)}\n`);
+      },
+      onToken: stream ? (t: string) => {
+        ensureMdStream()?.push(t);
+      } : undefined,
+      onToolStart: (name: string, args: string) => {
+        stopMdStream();
+        status.update({ phase: 'tool', tool: name });
+        status.log(`${chalk.cyan('tool')} ${chalk.bold(name)} ${chalk.dim(formatToolOutput(args, 180))}`);
+      },
+      onToolEnd: (name: string, out: string, err: boolean) => {
+        stopMdStream();
+        status.update({ phase: err ? 'tool failed' : 'observed', tool: name });
+        const label = err ? chalk.red('failed') : chalk.green('done');
+        status.log(`${label} ${chalk.bold(name)} ${chalk.dim(formatToolOutput(out, err ? 420 : 260))}`);
+      },
+      onWarning: (msg: string) => {
+        stopMdStream();
+        status.log(chalk.yellow(`warning ${formatToolOutput(msg, 420)}`));
+      },
     },
-    onThought: (t: string) => {
+    stop: () => {
       stopMdStream();
-      if (!stream) console.log(chalk.cyan(t));
-    },
-    onToken: stream ? (t: string) => {
-      ensureMdStream()?.push(t);
-    } : undefined,
-    onToolStart: (name: string, args: string) => {
-      stopMdStream();
-      console.log(chalk.magenta(`\n▸ ${name}`) + chalk.dim(` ${args}`));
-    },
-    onToolEnd: (name: string, out: string, err: boolean) => {
-      stopMdStream();
-      console.log(chalk[err ? 'red' : 'green'](`${name}: ${out}`));
-    },
-    onWarning: (msg: string) => {
-      stopMdStream();
-      console.log(chalk.yellow(`\n⚠️  ${msg}\n`));
+      status.stop();
     },
   };
+}
+
+function formatToolOutput(text: string, maxLength: number): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, maxLength - 1)}…`;
 }
 
 function printResult(result: Awaited<ReturnType<typeof runAgent>>): void {
@@ -687,30 +1059,42 @@ export function handleCliError(err: unknown): never {
   process.exit(1);
 }
 
-async function ensureServerRunning(manager: BonsaiManager): Promise<void> {
-  const config = await loadConfig();
+async function ensureServerRunning(manager: BonsaiManager, config: N0xConfig): Promise<void> {
+  if (!usesManagedLlamaServer(config)) {
+    return;
+  }
+
+  const port = getConfiguredPort(config.base_url, 8080);
 
   // Check if server is alive
-  if (await manager.isServerRunning(8080)) {
+  if (await manager.isServerRunning(port)) {
     return; // Already running
   }
 
   // Server not running, start it
   console.log(chalk.dim('Starting model server...'));
 
-  // Get model path from config
-  const modelPath = (config as Record<string, unknown>).model_path as string | undefined;
+  const modelPath = config.model_path ?? manager.getModelPath(config.default_model) ?? undefined;
   if (!modelPath) {
     showError(
       'Model not configured',
-      'No model path found in configuration.',
-      ['Run: n0x setup', 'Download a model first'],
+      'No model_path found in configuration and no downloaded model matched default_model.',
+      ['Run: n0x setup', 'Or add model_path = "/path/to/model.gguf" to ~/.n0x/config.toml'],
+    );
+    process.exit(1);
+  }
+
+  if (!(await fileExists(modelPath))) {
+    showError(
+      'Model file not found',
+      `Configured model_path does not exist: ${modelPath}`,
+      ['Run: n0x setup', 'Or update model_path in ~/.n0x/config.toml'],
     );
     process.exit(1);
   }
 
   try {
-    await manager.startServer(modelPath, 8080);
+    await manager.startServer(modelPath, port);
     console.log(chalk.green('✓ Server ready\n'));
   } catch (error) {
     showError(

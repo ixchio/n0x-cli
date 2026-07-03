@@ -231,7 +231,14 @@ export class Spinner {
 export async function showDoctorResults(results: {
   installation: boolean;
   hardware: boolean;
-  model: { exists: boolean; name?: string; path?: string; ramMB?: number };
+  model: {
+    exists: boolean;
+    name?: string;
+    path?: string;
+    backend?: string;
+    available?: string[];
+    ramMB?: number;
+  };
   server: { running: boolean; url?: string; uptime?: string };
   health: { toolCalling?: boolean; codeGen?: boolean };
 }): Promise<void> {
@@ -258,12 +265,33 @@ export async function showDoctorResults(results: {
   // Model
   const modelIcon = results.model.exists ? chalk.green('✓') : chalk.red('✗');
   console.log(`${modelIcon} ${chalk.bold('Model')}`);
-  if (results.model.exists) {
+  if (results.model.backend) {
+    console.log(chalk.dim(`  Backend: ${results.model.backend}`));
+  }
+  if (results.model.name) {
     console.log(chalk.dim(`  Name: ${results.model.name}`));
-    console.log(chalk.dim(`  Path: ${results.model.path}`));
-    console.log(chalk.dim(`  RAM: ~${results.model.ramMB}MB`));
+  }
+  if (results.model.exists) {
+    if (results.model.path) {
+      console.log(chalk.dim(`  Path: ${results.model.path}`));
+    }
+    if (results.model.ramMB) {
+      console.log(chalk.dim(`  RAM: ~${results.model.ramMB}MB`));
+    }
+    if (!results.model.path) {
+      console.log(chalk.dim('  Status: Available from backend'));
+    }
   } else {
-    console.log(chalk.yellow('  No model installed. Run: n0x setup'));
+    if (results.model.path) {
+      console.log(chalk.yellow(`  Configured file not found: ${results.model.path}`));
+    } else if (results.model.available?.length) {
+      console.log(chalk.yellow('  Configured model was not returned by backend.'));
+      console.log(chalk.dim(`  Available: ${results.model.available.slice(0, 5).join(', ')}`));
+    } else if (results.model.backend && results.model.backend !== 'llama-cpp') {
+      console.log(chalk.yellow('  Backend did not report this model.'));
+    } else {
+      console.log(chalk.yellow('  No model installed. Run: n0x setup'));
+    }
   }
   console.log();
 
@@ -287,9 +315,15 @@ export async function showDoctorResults(results: {
     console.log();
   }
 
-  const allGood = results.installation && results.model.exists;
-  if (allGood) {
+  const healthChecked = results.health.toolCalling !== undefined || results.health.codeGen !== undefined;
+  const healthGood = !healthChecked || Boolean(results.health.toolCalling && results.health.codeGen);
+  const setupReady = results.installation && results.model.exists;
+  if (setupReady && results.server.running && healthGood) {
     console.log(chalk.green.bold('All systems operational! 🚀\n'));
+  } else if (setupReady && results.server.running && !healthGood) {
+    console.log(chalk.yellow.bold('Backend reachable, but health checks failed.\n'));
+  } else if (setupReady) {
+    console.log(chalk.green.bold('Model configured. Server will auto-start on next run.\n'));
   } else {
     console.log(chalk.yellow.bold('Setup incomplete. Run: n0x setup\n'));
   }

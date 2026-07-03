@@ -52,6 +52,7 @@ const CONFIG_TEMPLATE = `# n0x — local-first coding agent
 default_provider = "local"
 default_model = "ternary-bonsai-4b"
 base_url = "http://localhost:8080/v1"
+backend = "llama-cpp"
 api_key = "none"
 max_steps = 20
 bash_timeout_ms = 120000
@@ -69,6 +70,46 @@ tavily_search_depth = "basic"
 tavily_extract_depth = "basic"
 `;
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function inferBackendFromBaseUrl(baseUrl: unknown): N0xConfig['backend'] {
+  if (typeof baseUrl !== 'string') return 'llama-cpp';
+
+  try {
+    const url = new URL(baseUrl);
+    const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    if (isLocalhost && url.port === '11434') return 'ollama';
+    if (isLocalhost && url.port === '8080') return 'llama-cpp';
+    return 'openai-compatible';
+  } catch {
+    return 'llama-cpp';
+  }
+}
+
+export function normalizeBackend(backend: N0xConfig['backend']): N0xConfig['backend'] {
+  return backend === 'llama-server' ? 'llama-cpp' : backend;
+}
+
+export function isLocalLlamaServerUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    return isLocalhost && (url.port === '8080' || (!url.port && url.protocol === 'http:'));
+  } catch {
+    return false;
+  }
+}
+
+export function usesManagedLlamaServer(config: N0xConfig): boolean {
+  const backend = normalizeBackend(config.backend);
+  return backend === 'llama-cpp' || (backend === 'auto' && isLocalLlamaServerUrl(config.base_url));
+}
+
+function backendFromDetection(type: string): N0xConfig['backend'] {
+  return type === 'ollama' ? 'ollama' : 'llama-cpp';
+}
 
 export async function loadConfig(): Promise<N0xConfig> {
   const path = configPath();
@@ -79,7 +120,21 @@ export async function loadConfig(): Promise<N0xConfig> {
     return configSchema.parse({});
   }
 
-  const raw = parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  let raw: Record<string, unknown>;
+  try {
+    raw = parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    throw new N0xError(
+      'CONFIG_INVALID',
+      `Invalid TOML at ${path}: ${errorMessage(error)}`,
+      'Fix the config file, or delete it and run: n0x init',
+    );
+  }
+
+  if (!raw.backend && raw.base_url) {
+    raw.backend = inferBackendFromBaseUrl(raw.base_url);
+  }
+
   const envKey = process.env.TAVILY_API_KEY?.trim();
   if (envKey && !raw.tavily_api_key) {
     raw.tavily_api_key = envKey;
@@ -96,23 +151,21 @@ export async function loadConfig(): Promise<N0xConfig> {
 
   const cfg = result.data;
 
-  // Auto-detect backend: probe llama-server first, then Ollama as a last resort.
-  // Ollama is intentionally deprioritized for Bonsai because its Qwen3 chat
-  // template forces <think> tokens on every response, which defeats 1-bit
-  // quantization. We still accept it as a fallback so users with non-Bonsai
-  // configs aren't broken, but we log a loud warning when it's chosen.
-  const detected = await autoDetectBackend(cfg.base_url);
-  if (detected && detected.url !== cfg.base_url) {
-    log.info(`Auto-detected backend: ${detected.type} at ${detected.url}`);
-    cfg.base_url = detected.url;
-    if (detected.type === 'ollama') {
-      log.warn(
-        'Ollama is not the recommended backend for Bonsai models. ' +
-          'The Qwen3 chat template forces thinking tokens on every response. ' +
-          'Use llama-server for reliable Bonsai behavior.',
-      );
-      if (detected.model) {
-        cfg.default_model = detected.model;
+  if (cfg.backend === 'auto') {
+    const detected = await autoDetectBackend(cfg.base_url);
+    if (detected) {
+      log.info(`Auto-detected backend: ${detected.type} at ${detected.url}`);
+      cfg.base_url = detected.url;
+      cfg.backend = backendFromDetection(detected.type);
+      if (detected.type === 'ollama') {
+        log.warn(
+          'Ollama is not the recommended backend for Bonsai models. ' +
+            'The Qwen3 chat template forces thinking tokens on every response. ' +
+            'Use llama-server for reliable Bonsai behavior.',
+        );
+        if (detected.model) {
+          cfg.default_model = detected.model;
+        }
       }
     }
   }

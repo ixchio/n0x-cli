@@ -7,7 +7,15 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
   error: 3,
 };
 
-let minLevel: LogLevel = process.env.N0X_LOG_LEVEL === 'debug' ? 'debug' : 'info';
+function initialLogLevel(): LogLevel {
+  const raw = process.env.N0X_LOG_LEVEL;
+  if (raw === 'debug' || raw === 'info' || raw === 'warn' || raw === 'error') {
+    return raw;
+  }
+  return 'error';
+}
+
+let minLevel: LogLevel = initialLogLevel();
 
 export function setLogLevel(level: LogLevel): void {
   minLevel = level;

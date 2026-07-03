@@ -1,259 +1,328 @@
 # n0x
 
-A terminal coding agent that runs on your laptop. Built for developers who want to use local LLMs for code generation without spending money or needing powerful hardware.
+A local-first coding agent for laptops that should not be running coding agents.
+
+n0x reads your repo, edits files, runs shell commands, writes tests, explains code,
+and can generate commits. The default setup runs a tiny Bonsai GGUF model through
+`llama-server`, so it works on machines where normal coding models would swap
+the system to death.
 
 [![CI](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/n0x-cli)](https://www.npmjs.com/package/n0x-cli)
 [![Downloads](https://img.shields.io/npm/dw/n0x-cli)](https://www.npmjs.com/package/n0x-cli)
 
----
+## Why n0x exists
 
-## What this is
+Most coding agents assume one of two things:
 
-I wanted to build websites using AI assistance but:
-- My laptop has 4GB RAM
-- I don't want to pay monthly subscriptions
-- I prefer running things locally
+- you are fine sending your repo to a hosted model
+- your machine has enough RAM for a serious local model
 
-So I built n0x. It's a ReAct-style coding agent that runs Bonsai models (1-bit quantized LLMs) — they fit in 370MB-1.75GB RAM and work on modest hardware. The agent loops through: think → call tool (read/write/bash) → observe → repeat.
+That leaves out a lot of people: students, cheap VPS users, old ThinkPads,
+offline setups, privacy-sensitive work, and anyone who just does not want another
+monthly bill.
 
-It's not state-of-the-art. But it's free, runs offline, and gets real work done on a 4GB laptop.
+n0x is the opposite bet. It is small, local, hackable, and honest about the
+tradeoff. Bonsai is not a frontier model. It will not beat Claude Code on a hard
+multi-file refactor. But it can run locally, for free, on modest hardware, and it
+can still do useful work.
 
-**Repository:** [github.com/ixchio/n0x-cli](https://github.com/ixchio/n0x-cli)
-
----
-
-## Install and run
+## Install
 
 ```bash
 npm install -g n0x-cli
-cd ~/my-project
-n0x run "add dark mode"
 ```
 
-First run auto-detects your RAM, downloads the appropriate model, starts llama-server. Takes ~2 minutes.
-
----
-
-## Why this exists (design philosophy)
-
-**Zero cost infrastructure:** Everything runs locally. No API keys, no monthly fees, no usage limits. Download models once, use forever.
-
-**Low-end hardware support:** Built for 4GB laptops. Bonsai uses 1-bit quantization (ternary weights: -1, 0, +1) which compresses models 16× smaller than fp16. The 4B model runs in 860MB.
-
-**No internet dependency:** Works offline. Models download once via HuggingFace. After that, completely air-gapped.
-
-**Educational:** Code is readable TypeScript. The agent loop is ~200 lines. Tool system is pluggable. You can understand and modify how it works.
-
-**Practical tradeoffs:** Bonsai 4B scores ~83% on code benchmarks. Larger models score higher but need more RAM. This is about making AI assistance accessible on hardware you already own.
-
----
-
-## What it does
-
-The agent can:
-- Read and write files
-- Execute bash commands (with safety denylist)
-- Search with ripgrep/glob
-- Apply unified diffs
-- Generate git commits
-- Persist memory across sessions
-- Learn from failures (reflection system)
-
-Basic ReAct loop:
-```
-1. Read goal
-2. Think (LLM inference)
-3. Call tool (e.g., Read('src/auth.ts'))
-4. Observe result
-5. Think again
-6. Call next tool
-7. Repeat until done (max 20 steps)
-```
-
----
-
-## Commands
+Then run it inside a project:
 
 ```bash
-# Core agent
-n0x run "refactor auth.ts to use JWT"
-n0x run "write tests for utils/" -i      # interactive mode
-n0x run "optimize queries" --dry         # preview only
-
-# Utilities
-n0x chat                    # REPL
-n0x explain src/file.ts     # one-shot explanation
-n0x fix "error message"     # auto-patch from stack trace
-n0x commit                  # generate commit from staged diff
-
-# Setup
-n0x setup                   # hardware detection + model download
-n0x doctor                  # check server status
-n0x models                  # list available models
-
-# Info
-n0x map                     # repo tree
-n0x symbols                 # symbol index
-n0x reflections             # what the agent learned from failures
+cd ~/my-project
+n0x run "add a dark mode toggle"
 ```
 
----
+On first run, n0x creates `~/.n0x/config.toml`, helps you choose a model,
+downloads it, and starts the local backend.
+
+Check your setup any time:
+
+```bash
+n0x doctor
+```
+
+## What it can do
+
+```bash
+# Core agent loop
+n0x run "fix the login redirect bug"
+n0x run "write tests for src/auth.ts" --dry
+n0x run "refactor this module" -i
+n0x run --model qwen2.5-coder:7b "clean up the API layer"
+
+# Interactive session
+n0x chat
+
+# One-shot utilities
+n0x explain src/server.ts
+n0x fix "TypeError: Cannot read properties of undefined"
+n0x commit
+
+# Project context
+n0x init
+n0x map
+n0x symbols
+n0x memory
+n0x reflections
+n0x checkpoint "before refactor"
+n0x checkpoints
+n0x restore latest
+
+# Models and backends
+n0x setup
+n0x models
+n0x use llama-server
+n0x use ollama
+n0x use auto
+```
+
+Inside `n0x chat`, use slash commands:
+
+```text
+/help
+/status
+/model qwen2.5-coder:7b
+/memory
+/checkpoint before risky edit
+/checkpoints
+/restore latest
+/clear
+/exit
+```
+
+## How it works
+
+n0x is a ReAct-style agent:
+
+```text
+read goal
+build context
+make a plan
+call a tool
+observe output
+repeat
+```
+
+The model gets tools for reading files, editing files, applying patches,
+searching with ripgrep/glob, running bash, and inspecting the repo. The loop is
+plain TypeScript, not a hidden service.
+
+The default backend is:
+
+```text
+n0x -> llama-server -> local GGUF model
+```
+
+You can also point it at Ollama or any OpenAI-compatible endpoint:
+
+```text
+n0x -> Ollama
+n0x -> OpenAI-compatible local or remote server
+```
 
 ## Models
 
-n0x defaults to **Bonsai via llama-server** (Ternary quantization, runs on CPU):
+n0x defaults to Bonsai through `llama-server`.
 
-| Model | RAM | Notes |
-|-------|-----|-------|
-| Bonsai-4B | 860MB | Recommended for 4GB systems |
-| Bonsai-8B | 1.75GB | Better accuracy, needs 8GB |
-| Bonsai-1.7B | 370MB | Fastest, lower quality |
+| Model | Approx RAM | Use it for |
+| --- | ---: | --- |
+| Ternary Bonsai 1.7B | 370MB | very low RAM, small edits |
+| Ternary Bonsai 4B | 860MB | default for 4GB-ish machines |
+| Ternary Bonsai 8B | 1.75GB | better quality if you have room |
 
-Also works with **Ollama** (easier install, native tool calling):
+If you already use Ollama:
+
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5-coder:3b
 n0x use ollama
+n0x run --model qwen2.5-coder:3b "write tests for utils"
 ```
 
-Or any OpenAI-compatible API endpoint. Set `base_url` and `default_model` in `~/.n0x/config.toml`.
+For a custom OpenAI-compatible server, edit `~/.n0x/config.toml`:
 
-**Model selection logic:**
-- 4GB RAM → Bonsai-4B (default)
-- 8GB RAM → qwen2.5-coder:3b via Ollama
-- 16GB+ RAM → qwen2.5-coder:7b via Ollama
-
-Run `n0x setup` and it auto-detects hardware and suggests the best model.
-
----
+```toml
+default_model = "your-model"
+base_url = "http://localhost:8000/v1"
+backend = "openai-compatible"
+api_key = "none"
+```
 
 ## Configuration
 
-`~/.n0x/config.toml`:
+The config lives at:
+
+```text
+~/.n0x/config.toml
+```
+
+Typical llama-server config:
 
 ```toml
+default_provider = "local"
 default_model = "ternary-bonsai-4b"
 base_url = "http://localhost:8080/v1"
+backend = "llama-cpp"
 api_key = "none"
+
 max_steps = 20
 bash_timeout_ms = 120000
 llm_timeout_ms = 300000
+stream_output = true
 
-# Web search (requires Tavily API key, free tier available)
+sandbox_docker = false
+sandbox_image = "node:22-alpine"
+
+model_path = "/home/you/.n0x/models/ternary-bonsai-4b-q2.gguf"
+
 tavily_enabled = false
+tavily_search_depth = "basic"
+tavily_extract_depth = "basic"
 # tavily_api_key = "tvly-..."
 ```
 
-Override model per-run:
+Backend rules are simple:
+
+- `backend = "llama-cpp"` uses your GGUF file and can auto-start `llama-server`
+- `backend = "ollama"` calls Ollama on port `11434`
+- `backend = "openai-compatible"` calls whatever `base_url` points to
+- `backend = "auto"` probes common local ports and uses what is alive
+
+`n0x use ...` updates both `base_url` and `backend`.
+
+## Safety
+
+n0x is an agent that can edit files and run commands. Treat it like a junior
+developer with shell access.
+
+What is built in:
+
+- `--dry` previews changes without writing files
+- `-i` asks before applying writes and patches
+- apply/interactive runs create a checkpoint before the agent can edit
+- `n0x restore latest` reverts the workspace to the last checkpoint
+- file tools are confined to the current workspace
+- symlink traversal is blocked
+- risky shell patterns like `rm -rf /`, fork bombs, and `curl | bash` are denied
+- existing files are backed up under `~/.n0x/backups/` before mutation
+- Docker sandboxing is available with `sandbox_docker = true`
+
+There is no magic trust layer. Review diffs for important code.
+
+## When to use it
+
+Good fits:
+
+- small apps
+- tests
+- one-file refactors
+- bug fixes from stack traces
+- code explanation
+- learning how coding agents work
+- offline or private repos
+
+Bad fits:
+
+- big architecture rewrites
+- production-critical edits without review
+- huge monorepos on tiny context windows
+- tasks where you need frontier-model reasoning
+
+If you have a strong hosted agent and do not care about local/offline use, use
+that. n0x is for the other cases.
+
+## Troubleshooting
+
+Run this first:
+
 ```bash
-n0x run --model qwen2.5-coder:7b "complex refactor"
+n0x doctor
 ```
 
-Switch backends:
-```bash
-n0x use ollama        # → port 11434
-n0x use llama-server  # → port 8080
-n0x use auto          # → auto-detect
+If the model file exists but n0x says it is not configured, check:
+
+```toml
+backend = "llama-cpp"
+model_path = "/absolute/path/to/model.gguf"
+base_url = "http://localhost:8080/v1"
 ```
 
----
+If n0x is using Ollama when you wanted llama-server:
+
+```bash
+n0x use llama-server
+n0x doctor
+```
+
+If you want Ollama:
+
+```bash
+ollama serve
+ollama pull qwen2.5-coder:3b
+n0x use ollama
+n0x run --model qwen2.5-coder:3b "your task"
+```
+
+If `llama-server` is missing:
+
+```bash
+which llama-server
+```
+
+Install llama.cpp, then rerun:
+
+```bash
+n0x doctor
+```
+
+If the model gets lost in context, use a narrower prompt:
+
+```bash
+n0x run "only edit src/auth.ts: add validation for empty email"
+```
+
+Or reduce the run:
+
+```bash
+n0x run --max-steps 8 --dry "inspect the bug and propose a patch"
+```
+
+If an agent run made bad edits:
+
+```bash
+n0x checkpoints
+n0x restore latest
+```
+
+Restore is destructive by design: it returns the workspace to the checkpoint and
+removes files created after that checkpoint. Use git too.
 
 ## Architecture
 
-```
+```text
 src/
-├── agent/
-│   ├── loop.ts         # Main ReAct loop
-│   ├── planner.ts      # Task planning
-│   ├── memory.ts       # Persistent notes
-│   └── reflection.ts   # Learn from failures
-│
-├── tools/
-│   ├── bash.ts         # Shell execution
-│   ├── read.ts         # File reading
-│   ├── write.ts        # File writing
-│   ├── edit.ts         # In-place string replace
-│   ├── patch.ts        # Unified diff application
-│   ├── grep.ts         # ripgrep wrapper
-│   └── ...
-│
-├── llm/
-│   ├── client.ts       # OpenAI-compatible API client
-│   ├── detect.ts       # Backend auto-detection
-│   └── health.ts       # Health checks
-│
-├── context/
-│   ├── build.ts        # Context assembly
-│   ├── symbols.ts      # Symbol indexing
-│   ├── compressor.ts   # Context compression
-│   └── session.ts      # Session persistence
-│
-└── setup/
-    ├── manager.ts      # Model lifecycle
-    ├── downloader.ts   # Model downloads
-    └── ui.ts           # Setup UI
+  agent/       loop, planner, memory, reflection
+  tools/       read, write, edit, patch, bash, grep, glob
+  llm/         OpenAI-compatible client, backend detection, health checks
+  context/     repo context, symbols, session, compression
+  setup/       model download, llama-server lifecycle, terminal UI
+  config/      schema and config parsing
 ```
 
-The agent is stateless per-run. Context building reads git status, file trees, symbol index. Tools execute in cwd with safety checks (path confinement, bash denylist).
+The important files:
 
----
-
-## How 1-bit quantization works
-
-Normal models store weights as 16-bit floats (fp16). Bonsai uses **ternary quantization**:
-- Each weight becomes -1, 0, or +1
-- 16× smaller than fp16
-- ~7-10% accuracy loss on benchmarks
-
-This is why Bonsai-4B (860MB) runs where qwen2.5-coder:3b (3GB) would swap on a 4GB system.
-
-**Trade-off:** Lower accuracy for massive memory savings. Practical for code generation on constrained hardware.
-
----
-
-## Safety mechanisms
-
-- **Path confinement:** Tools reject paths outside workspace (`../` escape blocked)
-- **Bash denylist:** Blocks `rm -rf /`, fork bombs, destructive patterns
-- **Auto-backups:** Every file edit saved to `~/.n0x/backups/` before mutation
-- **Docker sandbox:** Optional containerized execution (`sandbox_docker = true`)
-- **Secret redaction:** API keys scrubbed from logs
-- **Interactive mode:** Review diffs before applying (`-i` flag)
-
-Undo last action:
-```bash
-n0x undo
-```
-
----
-
-## Limitations (important)
-
-**Not production-grade AI:**
-- Bonsai-4B is 83% accurate on coding benchmarks
-- Makes mistakes (use `-i` flag to review diffs)
-- Limited context window (2048-4096 tokens depending on model)
-- Weaker at complex multi-file refactors
-
-**Hardware constraints:**
-- 4GB RAM works but is tight (close other apps during agent runs)
-- CPU inference is 10-100× slower than GPU
-- Large repos (>10k files) may cause context overflow
-
-**Use cases this is good for:**
-- Adding features to small projects
-- Writing tests
-- Refactoring single files
-- Fixing bugs from stack traces
-- Learning how AI coding agents work
-
-**Not good for:**
-- Production-critical code generation without review
-- Large-scale refactors
-- Performance-critical operations (use GPU inference)
-
----
+- `src/agent/loop.ts` is the main ReAct loop
+- `src/tools/` is the tool surface
+- `src/llm/client.ts` is the OpenAI-compatible chat client
+- `src/config.ts` owns config loading and backend selection
+- `src/setup/manager.ts` starts `llama-server`
 
 ## Development
 
@@ -261,63 +330,62 @@ n0x undo
 git clone https://github.com/ixchio/n0x-cli.git
 cd n0x-cli
 npm install
-npm run dev -- run "test prompt"
+npm run dev -- run "read the repo and summarize it" --dry
 ```
 
-Run tests:
+Checks:
+
 ```bash
-npm run check   # typecheck + lint + tests
+npm run typecheck
+npm run lint
+npm test
+npm run build
 ```
 
-TypeScript strict mode enabled. PRs welcome.
+One command:
 
----
-
-## Documentation
-
-- [workflow.md](./docs/workflow.md) — Daily usage patterns
-- [development.md](./docs/development.md) — Contributing guide
-- [changelog.md](./docs/changelog.md) — Version history
-
----
+```bash
+npm run check
+```
 
 ## FAQ
 
-**Why 1-bit quantization?**  
-Memory efficiency. On a 4GB laptop running VS Code + Docker + browser, you have ~1-2GB free RAM. Normal quantized models (Q4, Q8) don't fit. Ternary weights do.
+### Is this trying to replace Claude Code?
 
-**Why not just use [commercial service]?**  
-This is for people who want free, offline, local-first tools. If you can afford subscriptions and don't care about privacy, commercial services are better.
+No. Claude Code is better for hard agentic coding. n0x is for local, cheap,
+offline, low-RAM work. Different constraint, different product.
 
-**Does this work on M1 Macs?**  
-Yes. llama-server has native Apple Silicon support.
+### Why Bonsai?
 
-**Can I use bigger models if I have more RAM?**  
-Yes. Set `default_model` in config to any model your system can load. Ollama makes this easy:
+Because memory is the bottleneck on cheap machines. Ternary weights make the
+model small enough to run where normal local coding models do not fit.
+
+### Can I use bigger models?
+
+Yes. Use Ollama or point `base_url` at another OpenAI-compatible server.
+
 ```bash
 ollama pull qwen2.5-coder:7b
 n0x use ollama
+n0x run --model qwen2.5-coder:7b "refactor the router"
 ```
 
-**How does this compare to [other tool]?**  
-It doesn't. This is a free, educational tool for modest hardware. Use whatever works for you.
+### Does it work offline?
 
-**Is this secure?**  
-Models run locally (can't exfiltrate data). But agents execute bash commands — review prompts carefully. Use `--dry` or `-i` flags when unsure. Enable Docker sandbox for untrusted inputs.
+Yes after the model is downloaded. Web search is off by default.
 
----
+### Is it secure?
+
+The model can run locally, and tools are constrained, but this is still an
+agent with filesystem and shell access. Use `--dry`, `-i`, git, and code review.
 
 ## License
 
 MIT
 
----
+## Credits
 
-## Acknowledgments
-
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) — GGUF inference engine
-- [Bonsai models](https://huggingface.co/prism-ml) — 1-bit quantization research
-- [Ollama](https://ollama.com) — Easy model distribution
-- [MCP](https://modelcontextprotocol.io) — Tool protocol
-
-Built by developers who want accessible AI tooling on modest hardware.
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) for local GGUF inference
+- [Prism](https://huggingface.co/prism-ml) for Bonsai models
+- [Ollama](https://ollama.com) for easy local model serving
+- [MCP](https://modelcontextprotocol.io) for the tool protocol

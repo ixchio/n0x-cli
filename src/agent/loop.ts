@@ -31,6 +31,14 @@ export interface AgentCallbacks {
   onPlan?: (plan: string) => void;
   onThought?: (text: string) => void;
   onToken?: (token: string) => void;
+  onStep?: (status: {
+    step: number;
+    maxSteps: number;
+    contextChars: number;
+    contextBudget: number;
+    contextPercent: number;
+    approxTokens: number;
+  }) => void;
   onToolStart?: (name: string, argsPreview: string) => void;
   onToolEnd?: (name: string, output: string, isError: boolean) => void;
   onWarning?: (msg: string) => void;
@@ -113,13 +121,21 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
       const charCount = JSON.stringify(messages).length;
       const budget = contextBudgetForModel(config.default_model);
       const usage = charCount / budget;
+      callbacks?.onStep?.({
+        step: stepsUsed,
+        maxSteps,
+        contextChars: charCount,
+        contextBudget: budget,
+        contextPercent: Math.min(100, usage * 100),
+        approxTokens: Math.ceil(charCount / 4),
+      });
 
       if (usage > 0.7) {
         // Compress context before it becomes a problem
         log.info('Context compression triggered', { usage: `${Math.round(usage * 100)}%` });
         messages = await contextCompressor.compressMessages(messages, budget);
         callbacks?.onWarning?.(
-          `🗜️ Context compressed to fit window (was ${Math.round(usage * 100)}%)`
+          `Context compressed to fit the model window (was ${Math.round(usage * 100)}%).`
         );
       }
 
@@ -227,7 +243,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
         const repeats = recentCallSigs.filter((s) => s === sig).length;
         if (repeats >= LOOP_THRESHOLD) {
           // FORCE strategy change - don't just warn, inject strong system override
-          const forceMessage = `🚨 LOOP DETECTED - MANDATORY STRATEGY CHANGE REQUIRED 🚨
+          const forceMessage = `LOOP DETECTED - STRATEGY CHANGE REQUIRED
 
 You have called ${tc.function.name}(${JSON.stringify(args)}) ${repeats} times with IDENTICAL arguments in the last ${LOOP_WINDOW} steps.
 
@@ -240,7 +256,7 @@ This approach is NOT WORKING. You MUST:
 DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
 
           callbacks?.onWarning?.(
-            `⚠️ Loop detected: ${tc.function.name} called ${repeats}x - forcing strategy change`
+            `Loop detected: ${tc.function.name} called ${repeats}x with the same arguments. Forcing a strategy change.`
           );
 
           // Inject as high-priority system message
@@ -296,7 +312,7 @@ DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
           );
 
           // Inject reflection into conversation
-          callbacks?.onWarning?.(` Reflection: ${reflection}`);
+          callbacks?.onWarning?.(`Reflection: ${reflection}`);
           messages.push({
             role: 'user',
             content: `[reflection] ${reflection}\nNow try a different approach.`,

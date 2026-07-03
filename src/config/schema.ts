@@ -5,6 +5,8 @@ export const configSchema = z.object({
   default_provider: z.string().default('local'),
   default_model: z.string().default(DEFAULT_MODEL),
   base_url: z.string().url().default(DEFAULT_BASE_URL),
+  backend: z.enum(['auto', 'llama-cpp', 'llama-server', 'ollama', 'openai-compatible']).default('llama-cpp'),
+  model_path: z.string().min(1).optional(),
   api_key: z.string().default('none'),
   max_steps: z.number().int().min(1).max(200).default(20),
   git_context: z.boolean().default(true),
