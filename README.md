@@ -10,6 +10,7 @@ the system to death.
 [![CI](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ixchio/n0x-cli/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/n0x-cli)](https://www.npmjs.com/package/n0x-cli)
 [![Downloads](https://img.shields.io/npm/dw/n0x-cli)](https://www.npmjs.com/package/n0x-cli)
+[![GitHub Releases](https://img.shields.io/github/v/release/ixchio/n0x-cli)](https://github.com/ixchio/n0x-cli/releases)
 
 ## Why n0x exists
 
