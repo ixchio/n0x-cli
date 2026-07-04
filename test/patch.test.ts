@@ -10,4 +10,11 @@ describe('patch', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.content).toBe(neu);
   });
+
+  it('rejects oversized patch input before parsing', () => {
+    const result = applyUnifiedPatch('x\n', `${' '.repeat(1_000_001)}\n`);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('Patch is too large');
+  });
 });

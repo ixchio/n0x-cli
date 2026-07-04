@@ -31,10 +31,10 @@ Your model determines how well n0x performs. Run `n0x models` to see options.
 
 | Situation | Model | Command |
 |-----------|-------|---------|
-| 8GB RAM laptop | `qwen2.5-coder:3b` | `ollama pull qwen2.5-coder:3b` |
-| 16GB RAM | `qwen2.5-coder:7b` | `ollama pull qwen2.5-coder:7b` |
-| Complex reasoning task | `qwen3:4b` | `ollama pull qwen3:4b` |
-| Minimal RAM / offline | `Bonsai-4B` | llama-server required |
+| 4GB RAM laptop | Ternary Bonsai 4B | `n0x setup` |
+| 6GB+ RAM laptop | Ternary Bonsai 8B | `n0x setup` |
+| Existing Ollama setup | `qwen2.5-coder:3b` | `ollama pull qwen2.5-coder:3b && n0x use ollama` |
+| Custom OpenAI-compatible backend | Your served model | `n0x use http://localhost:PORT/v1` |
 
 Switch model for a single run without touching config:
 ```bash
@@ -49,7 +49,7 @@ If you don't fully trust what the agent will do, use `-i`:
 ```bash
 n0x run "update all dependencies" -i
 ```
-It'll show you a colored diff and ask `Apply this? [y/N]` before touching any file.
+It asks before applying file writes, edits, patches, deletes, and renames.
 
 ---
 
@@ -95,13 +95,14 @@ Agents fail when context gets too large. Help n0x stay lean:
 
 ---
 
-## 8. Undo Anything
+## 8. Restore Checkpoints
 
-n0x backs up every file before editing. Revert the last change:
+n0x creates checkpoints before apply and interactive runs. List and restore them:
 ```bash
-n0x undo
+n0x checkpoints
+n0x restore latest
 ```
-Manual backups live in `~/.n0x/backups/` if you need to dig further.
+Manual backups also live in `~/.n0x/backups/` if you need to dig further.
 
 ---
 
@@ -111,11 +112,11 @@ Manual backups live in `~/.n0x/backups/` if you need to dig further.
 # Check what's running
 n0x doctor
 
-# Switch to Ollama (recommended)
-n0x use ollama
-
 # Switch to llama-server
 n0x use llama-server
+
+# Switch to Ollama
+n0x use ollama
 
 # Auto-detect whichever backend is alive
 n0x use auto

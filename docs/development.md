@@ -12,10 +12,12 @@ cd n0x-cli
 npm install
 ```
 
-You need Node.js 20+ and a running LLM backend (Ollama recommended):
+You need Node.js 20+ and a running LLM backend. The default setup uses Bonsai through `llama-server`:
 ```bash
-ollama pull qwen2.5-coder:3b
+npm run dev -- setup
 ```
+
+If you prefer Ollama, run `ollama pull qwen2.5-coder:3b` and `npm run dev -- use ollama`.
 
 ---
 
@@ -138,4 +140,4 @@ TypeScript is strict — `noUncheckedIndexedAccess`, `strict: true`. No `any` al
 
 ## Versioning
 
-We use `npm version minor|patch` to bump versions. Every publish runs the full `check` + `build` chain via `prepublishOnly`.
+We use `npm version minor|patch` to bump versions. `prepublishOnly` runs the full check suite, and `prepack` rebuilds `dist/` before `npm publish` or `npm pack`.

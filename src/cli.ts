@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { resolve } from 'node:path';
 import { access, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import {
   loadConfig,
   writeDefaultConfig,
@@ -42,7 +43,9 @@ import {
 } from './lib/checkpoint.js';
 import { RunStatusLine } from './lib/run-status.js';
 
-const VERSION = '0.5.0'; // Bonsai UX release
+const require = createRequire(import.meta.url);
+const packageJson = require('../package.json') as { version?: string };
+const VERSION = packageJson.version ?? '0.0.0';
 
 type CliAbortController = AbortController & { dispose: () => void };
 
@@ -394,7 +397,7 @@ export function createCli(): Command {
     .option('--max-steps <n>', 'Max iterations (default 20)', (v) => parseInt(v, 10))
     .option('--dry', 'Preview diffs only — do not write files')
     .option('--apply', 'Write changes to disk (default)')
-    .option('-i, --interactive', 'Confirm each file write interactively')
+    .option('-i, --interactive', 'Confirm file mutations interactively')
     .option('--no-stream', 'Disable streaming tokens')
     .option('--low-memory', 'Optimize for systems with <6GB RAM')
     .action(async (goal: string | undefined, opts: {
@@ -1101,8 +1104,7 @@ async function ensureServerRunning(manager: BonsaiManager, config: N0xConfig): P
       'Server failed to start',
       error instanceof Error ? error.message : String(error),
       [
-        'Check if llama-server is installed: which llama-server',
-        'Install llama.cpp: brew install llama.cpp (macOS)',
+        ...manager.getLlamaServerInstallHints(),
         'Re-run setup: n0x setup',
       ],
     );

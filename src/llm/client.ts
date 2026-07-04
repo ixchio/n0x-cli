@@ -134,60 +134,67 @@ export class LLMClient {
     const toolCalls: LLMResponse['tool_calls'] = [];
     let finish_reason = 'stop';
 
+    const processLine = (line: string): void => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) return;
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') return;
+      try {
+        const parsed = JSON.parse(data) as {
+          choices?: Array<{
+            delta?: {
+              content?: string;
+              tool_calls?: Array<{
+                index?: number;
+                id?: string;
+                function?: { name?: string; arguments?: string };
+              }>;
+            };
+            finish_reason?: string | null;
+          }>;
+        };
+        const choice = parsed.choices?.[0];
+        if (choice?.finish_reason) finish_reason = choice.finish_reason;
+        const delta = choice?.delta;
+        if (delta?.content) {
+          content += delta.content;
+          onToken(delta.content);
+        }
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            if (!toolCalls[idx]) {
+              toolCalls[idx] = {
+                id: tc.id ?? `call_${idx}`,
+                type: 'function',
+                function: { name: '', arguments: '' },
+              };
+            }
+            if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
+            if (tc.function?.arguments) {
+              toolCalls[idx].function.arguments += tc.function.arguments;
+            }
+          }
+        }
+      } catch {
+        /* skip malformed stream frames */
+      }
+    };
+
+    const processBuffer = (final: boolean): void => {
+      const lines = buffer.split('\n');
+      buffer = final ? '' : lines.pop() ?? '';
+      for (const line of lines) processLine(line);
+    };
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(data) as {
-            choices?: Array<{
-              delta?: {
-                content?: string;
-                tool_calls?: Array<{
-                  index?: number;
-                  id?: string;
-                  function?: { name?: string; arguments?: string };
-                }>;
-              };
-              finish_reason?: string | null;
-            }>;
-          };
-          const choice = parsed.choices?.[0];
-          if (choice?.finish_reason) finish_reason = choice.finish_reason;
-          const delta = choice?.delta;
-          if (delta?.content) {
-            content += delta.content;
-            onToken(delta.content);
-          }
-          if (delta?.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0;
-              if (!toolCalls[idx]) {
-                toolCalls[idx] = {
-                  id: tc.id ?? `call_${idx}`,
-                  type: 'function',
-                  function: { name: '', arguments: '' },
-                };
-              }
-              if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
-              if (tc.function?.arguments) {
-                toolCalls[idx].function.arguments += tc.function.arguments;
-              }
-            }
-          }
-        } catch {
-          /* skip */
-        }
-      }
+      processBuffer(false);
     }
+    buffer += decoder.decode();
+    processBuffer(true);
 
     return {
       content: content || null,

@@ -1,5 +1,8 @@
 import { applyPatch, createPatch, structuredPatch } from 'diff';
 
+const MAX_PATCH_BYTES = 1_000_000;
+const MAX_PATCH_LINES = 20_000;
+
 export interface PatchPreview {
   path: string;
   hunks: string;
@@ -16,6 +19,22 @@ export function applyUnifiedPatch(
   oldContent: string,
   patchText: string,
 ): { ok: true; content: string } | { ok: false; error: string } {
+  const patchBytes = Buffer.byteLength(patchText, 'utf8');
+  if (patchBytes > MAX_PATCH_BYTES) {
+    return {
+      ok: false,
+      error: `Patch is too large (${patchBytes} bytes). Limit is ${MAX_PATCH_BYTES} bytes.`,
+    };
+  }
+
+  const patchLines = patchText.split('\n').length;
+  if (patchLines > MAX_PATCH_LINES) {
+    return {
+      ok: false,
+      error: `Patch has too many lines (${patchLines}). Limit is ${MAX_PATCH_LINES} lines.`,
+    };
+  }
+
   const result = applyPatch(oldContent, patchText);
   if (result === false) {
     return { ok: false, error: 'Patch did not apply cleanly' };

@@ -1,5 +1,5 @@
 import { realpathSync, lstatSync } from 'node:fs';
-import { resolve, relative, isAbsolute } from 'node:path';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { N0xError } from './errors.js';
 
 export function resolveWithinWorkspace(
@@ -13,30 +13,50 @@ export function resolveWithinWorkspace(
 
   const rel = relative(root, target);
   if (rel.startsWith('..') || isAbsolute(rel)) {
-    throw new N0xError(
-      'PATH_DENIED',
-      `Path escapes workspace: ${userPath}`,
-      'Use paths relative to the project directory.',
-    );
+    throwPathDenied(userPath, 'Path escapes workspace');
   }
 
-  // SECURITY: Detect symlinks (potential security risk)
-  try {
-    const stats = lstatSync(target);
-    if (stats.isSymbolicLink()) {
-      throw new N0xError(
-        'PATH_DENIED',
-        `Symlinks are not allowed: ${userPath}`,
-        'For security reasons, n0x does not follow symbolic links.',
-      );
-    }
-  } catch (err) {
-    // File doesn't exist yet (e.g., Write operation) - that's okay
-    if (err instanceof N0xError) throw err;
-    // ENOENT is okay for new files
-  }
+  validateExistingSegments(root, target, userPath);
 
   return target;
+}
+
+function validateExistingSegments(root: string, target: string, userPath: string): void {
+  const rel = relative(root, target);
+  if (!rel) return;
+
+  const parts = rel.split(sep).filter(Boolean);
+  let current = root;
+
+  for (const part of parts) {
+    current = resolve(current, part);
+
+    let stats;
+    try {
+      stats = lstatSync(current);
+    } catch (err) {
+      if (isMissingPathError(err)) {
+        return;
+      }
+      throw err;
+    }
+
+    if (stats.isSymbolicLink()) {
+      throwPathDenied(userPath, 'Symlinks are not allowed');
+    }
+  }
+
+  try {
+    const realTarget = realpathSync(target);
+    const realRel = relative(root, realTarget);
+    if (realRel.startsWith('..') || isAbsolute(realRel)) {
+      throwPathDenied(userPath, 'Path escapes workspace');
+    }
+  } catch (err) {
+    if (err instanceof N0xError) throw err;
+    if (isMissingPathError(err)) return;
+    throw err;
+  }
 }
 
 function safeRealpath(p: string): string {
@@ -45,4 +65,21 @@ function safeRealpath(p: string): string {
   } catch {
     return resolve(p);
   }
+}
+
+function isMissingPathError(err: unknown): boolean {
+  return Boolean(
+    err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as NodeJS.ErrnoException).code === 'ENOENT',
+  );
+}
+
+function throwPathDenied(userPath: string, reason: string): never {
+  throw new N0xError(
+    'PATH_DENIED',
+    `${reason}: ${userPath}`,
+    'Use paths relative to the project directory. Symlinks are not followed.',
+  );
 }

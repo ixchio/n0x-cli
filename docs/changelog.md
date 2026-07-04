@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Default setup uses Bonsai GGUF models through managed `llama-server`.
+- Hardened file tools against symlink traversal and dry/interactive mode bypasses.
+- Model downloads now validate size and use atomic `.partial` files.
+- Release packaging now cleans and rebuilds `dist/` before packing.
+- Dependency audit cleaned for production dependencies.
+
 ## v0.4.0 — 2026-06-11
 
 **🚀 n0x is now model-agnostic — Ollama is the recommended backend**

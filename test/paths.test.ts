@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveWithinWorkspace } from '../src/lib/paths.js';
@@ -24,5 +24,22 @@ describe('resolveWithinWorkspace', () => {
     await writeFile(join(root, 'src', 'index.ts'), 'x');
     const resolved = resolveWithinWorkspace(root, 'src/index.ts');
     expect(resolved.endsWith('src/index.ts')).toBe(true);
+  });
+
+  it('denies files reached through a symlinked parent directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'n0x-test-'));
+    const outside = await mkdtemp(join(tmpdir(), 'n0x-outside-'));
+    await writeFile(join(outside, 'secret.txt'), 'secret');
+    await symlink(outside, join(root, 'out'));
+
+    expect(() => resolveWithinWorkspace(root, 'out/secret.txt')).toThrow(N0xError);
+  });
+
+  it('denies new files under a symlinked parent directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'n0x-test-'));
+    const outside = await mkdtemp(join(tmpdir(), 'n0x-outside-'));
+    await symlink(outside, join(root, 'out'));
+
+    expect(() => resolveWithinWorkspace(root, 'out/new.txt')).toThrow(N0xError);
   });
 });

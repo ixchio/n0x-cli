@@ -1,13 +1,9 @@
 /**
- * 🔥 LEGENDARY FEATURE #3: Smart Context Compression
- *
- * Automatically compresses conversation history to fit more context:
+ * Compress conversation history to fit more context:
  * - Summarizes old messages
  * - Keeps only relevant diffs
  * - Removes redundant tool calls
  * - Adaptive based on model size
- *
- * Perfect for: Long coding sessions, complex refactors, staying in context
  */
 
 import type { ChatMessage } from '../llm/types.js';

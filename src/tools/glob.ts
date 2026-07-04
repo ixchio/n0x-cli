@@ -1,4 +1,5 @@
 import { glob } from 'glob';
+import { isAbsolute } from 'node:path';
 import { globArgs } from './schemas.js';
 import type { Tool } from './types.js';
 import { parseArgs } from './types.js';
@@ -16,6 +17,13 @@ export const globTool: Tool = {
   },
   async execute(raw, ctx) {
     const args = parseArgs(globArgs, raw);
+    if (isUnsafeGlobPattern(args.pattern)) {
+      return {
+        output: 'Glob pattern must stay within the workspace.',
+        isError: true,
+      };
+    }
+
     const files = await glob(args.pattern, {
       cwd: ctx.cwd,
       nodir: true,
@@ -28,3 +36,7 @@ export const globTool: Tool = {
     };
   },
 };
+
+function isUnsafeGlobPattern(pattern: string): boolean {
+  return isAbsolute(pattern) || pattern.split(/[\\/]+/).includes('..');
+}

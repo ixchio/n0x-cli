@@ -34,7 +34,7 @@ export const BONSAI_MODELS: BonsaiModel[] = [
     id: 'ternary-bonsai-4b',
     name: 'Ternary Bonsai 4B',
     displayName: 'Ternary Bonsai 4B',
-    ramMB: 860,
+    ramMB: 1025,
     accuracy: 83,
     speed: '60-80 tok/sec',
     downloadUrl: 'https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/main/Ternary-Bonsai-4B-Q2_0.gguf',

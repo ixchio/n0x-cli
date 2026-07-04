@@ -1,6 +1,6 @@
 {
   "name": "n0x-cli",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "n0x-cli — Claude Code quality for 4GB systems, powered by Bonsai",
   "type": "module",
   "bin": {
@@ -12,6 +12,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
@@ -21,9 +22,10 @@
     "lint": "eslint src test",
     "lint:fix": "eslint src test --fix",
     "check": "npm run typecheck && npm run lint && npm run test",
-    "prepublishOnly": "npm run check && npm run build",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check",
     "download-binaries": "node scripts/download-llama-binaries.js",
-    "package": "npm run build && npm run download-binaries && node scripts/create-releases.js"
+    "package": "npm pack"
   },
   "keywords": [
     "n0x",
@@ -47,28 +49,24 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@tavily/core": "^0.7.5",
+    "@tavily/core": "^0.7.6",
     "adm-zip": "^0.5.18",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
-    "diff": "^7.0.0",
-    "fast-levenshtein": "^3.0.0",
-    "glob": "^11.0.2",
+    "diff": "^9.0.0",
+    "glob": "^13.0.6",
     "markstream-cli": "^0.0.2",
-    "shiki": "^4.2.0",
-    "smol-toml": "^1.6.1",
+    "smol-toml": "^1.7.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
     "@types/adm-zip": "^0.5.8",
-    "@types/diff": "^7.0.0",
-    "@types/fast-levenshtein": "^0.0.4",
-    "@types/node": "^22.13.10",
+    "@types/node": "^22.20.0",
     "eslint": "^9.22.0",
-    "tsx": "^4.19.3",
+    "tsx": "^4.23.0",
     "typescript": "^5.8.2",
-    "typescript-eslint": "^8.26.0",
-    "vitest": "^3.0.8"
+    "typescript-eslint": "^8.62.1",
+    "vitest": "^4.1.9"
   }
 }

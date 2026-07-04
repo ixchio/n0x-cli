@@ -196,8 +196,25 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
 
       if (response.content) callbacks?.onThought?.(response.content);
 
-      for (const tc of response.tool_calls) {
-        if (signal?.aborted) break;
+      const deferredUserMessages: ChatMessage[] = [];
+      let skipRemainingTools: string | undefined;
+
+      for (let i = 0; i < response.tool_calls.length; i++) {
+        const tc = response.tool_calls[i]!;
+
+        if (signal?.aborted) {
+          skipRemainingTools = 'Run cancelled before this tool call executed.';
+        }
+
+        if (skipRemainingTools) {
+          messages.push({
+            role: 'tool',
+            content: skipRemainingTools,
+            tool_call_id: tc.id,
+            name: tc.function.name,
+          });
+          continue;
+        }
 
         const extractArgs = (
           raw: string,
@@ -259,11 +276,17 @@ DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
             `Loop detected: ${tc.function.name} called ${repeats}x with the same arguments. Forcing a strategy change.`
           );
 
-          // Inject as high-priority system message
           messages.push({
+            role: 'tool',
+            content: `Skipped repeated tool call. ${tc.function.name} was called ${repeats} times with identical arguments; strategy change required.`,
+            tool_call_id: tc.id,
+            name: tc.function.name,
+          });
+          deferredUserMessages.push({
             role: 'user',
             content: forceMessage
           });
+          skipRemainingTools = 'Skipped because a repeated tool call forced a strategy change.';
 
           log.warn('Loop prevention triggered', {
             tool: tc.function.name,
@@ -271,8 +294,7 @@ DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
             args: JSON.stringify(args).slice(0, 100)
           });
 
-          // Skip this tool call and force re-planning
-          break;
+          continue;
         }
 
         const tool = getToolByName(tools, tc.function.name);
@@ -281,8 +303,7 @@ DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
         const pastCheck = reflectionEngine.checkPastMistakes(tc.function.name, args!);
         if (pastCheck.shouldWarn) {
           callbacks?.onWarning?.(pastCheck.advice);
-          // Inject warning into conversation so agent sees it
-          messages.push({
+          deferredUserMessages.push({
             role: 'user',
             content: `[reflection] ${pastCheck.advice}`,
           });
@@ -313,7 +334,7 @@ DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
 
           // Inject reflection into conversation
           callbacks?.onWarning?.(`Reflection: ${reflection}`);
-          messages.push({
+          deferredUserMessages.push({
             role: 'user',
             content: `[reflection] ${reflection}\nNow try a different approach.`,
           });
@@ -333,6 +354,10 @@ DO NOT repeat ${tc.function.name} again. Change your strategy NOW.`;
           tool_call_id: tc.id,
           name: tc.function.name,
         });
+      }
+
+      if (deferredUserMessages.length > 0) {
+        messages.push(...deferredUserMessages);
       }
 
       session = appendToSession(session, cwd, messages.slice(-4));

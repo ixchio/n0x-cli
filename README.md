@@ -133,10 +133,10 @@ n0x -> OpenAI-compatible local or remote server
 
 n0x defaults to Bonsai through `llama-server`.
 
-| Model | Approx RAM | Use it for |
+| Model | Approx model size | Use it for |
 | --- | ---: | --- |
 | Ternary Bonsai 1.7B | 370MB | very low RAM, small edits |
-| Ternary Bonsai 4B | 860MB | default for 4GB-ish machines |
+| Ternary Bonsai 4B | 1025MB | default for 4GB-ish machines |
 | Ternary Bonsai 8B | 1.75GB | better quality if you have room |
 
 If you already use Ollama:
@@ -206,7 +206,7 @@ developer with shell access.
 What is built in:
 
 - `--dry` previews changes without writing files
-- `-i` asks before applying writes and patches
+- `-i` asks before applying writes, edits, patches, deletes, and renames
 - apply/interactive runs create a checkpoint before the agent can edit
 - `n0x restore latest` reverts the workspace to the last checkpoint
 - file tools are confined to the current workspace
@@ -277,7 +277,15 @@ If `llama-server` is missing:
 which llama-server
 ```
 
-Install llama.cpp, then rerun:
+`n0x setup` tries to download a matching `llama-server` build. If that fails,
+install llama.cpp so `llama-server` is on `PATH`, or point n0x at a manual
+binary:
+
+```bash
+export N0X_LLAMA_SERVER=/absolute/path/to/llama-server
+```
+
+Then rerun:
 
 ```bash
 n0x doctor

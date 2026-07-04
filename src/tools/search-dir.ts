@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { relative } from 'node:path';
 import { searchDirArgs } from './schemas.js';
 import { resolveWithinWorkspace } from '../lib/paths.js';
@@ -6,6 +5,7 @@ import { truncate } from '../lib/output.js';
 import { N0xError } from '../lib/errors.js';
 import type { Tool } from './types.js';
 import { parseArgs } from './types.js';
+import { runRipgrep } from './ripgrep.js';
 
 export const searchDirTool: Tool = {
   name: 'SearchDir',
@@ -22,32 +22,30 @@ export const searchDirTool: Tool = {
   async execute(raw, ctx) {
     const args = parseArgs(searchDirArgs, raw);
     const relPath = args.path ?? '.';
+    const root = resolveWithinWorkspace(ctx.cwd, '.');
     const absDir = resolveWithinWorkspace(ctx.cwd, relPath);
-    const relDir = relative(ctx.cwd, absDir) || '.';
+    const relDir = relative(root, absDir) || '.';
 
-    return new Promise((resolve) => {
-      const child = spawn(
-        'rg',
+    try {
+      const result = await runRipgrep(
         ['--line-number', '--color=never', '-C', '1', '--max-count', '80', args.pattern, relDir],
-        { cwd: ctx.cwd },
+        root,
+        ctx.config.bash_timeout_ms,
       );
-      let out = '';
-      let err = '';
-      child.stdout.on('data', (d) => (out += d));
-      child.stderr.on('data', (d) => (err += d));
-      child.on('close', (code) => {
-        if (code === 0 || code === 1) {
-          resolve({ output: truncate(out || '(no matches)', 30_000) });
-        } else {
-          resolve({ output: err || `rg exited ${code}`, isError: true });
-        }
-      });
-      child.on('error', () =>
-        resolve({
-          output: new N0xError('TOOL_FAILED', 'ripgrep not found').format(),
-          isError: true,
-        }),
-      );
-    });
+
+      if (result.code === 0 || result.code === 1) {
+        return { output: truncate(result.stdout || '(no matches)', 30_000) };
+      }
+
+      return { output: result.stderr || `rg exited ${result.code}`, isError: true };
+    } catch (error) {
+      if (error instanceof N0xError) {
+        return { output: error.format(), isError: true };
+      }
+      return {
+        output: error instanceof Error ? error.message : String(error),
+        isError: true,
+      };
+    }
   },
 };

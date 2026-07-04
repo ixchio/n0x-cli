@@ -276,7 +276,7 @@ export async function showDoctorResults(results: {
       console.log(chalk.dim(`  Path: ${results.model.path}`));
     }
     if (results.model.ramMB) {
-      console.log(chalk.dim(`  RAM: ~${results.model.ramMB}MB`));
+      console.log(chalk.dim(`  Model size: ~${results.model.ramMB}MB`));
     }
     if (!results.model.path) {
       console.log(chalk.dim('  Status: Available from backend'));

@@ -93,13 +93,13 @@ export function normalizeBackend(backend: N0xConfig['backend']): N0xConfig['back
 }
 
 export function isLocalLlamaServerUrl(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-    return isLocalhost && (url.port === '8080' || (!url.port && url.protocol === 'http:'));
-  } catch {
-    return false;
-  }
+	  try {
+	    const url = new URL(baseUrl);
+	    const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+	    return isLocalhost && url.port === '8080';
+	  } catch {
+	    return false;
+	  }
 }
 
 export function usesManagedLlamaServer(config: N0xConfig): boolean {

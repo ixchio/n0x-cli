@@ -80,8 +80,8 @@ get_latest_version() {
     fi
 
     if [ -z "$VERSION" ]; then
-      echo -e "${YELLOW}⚠ Could not fetch latest version, using v0.5.0${NC}"
-      VERSION="v0.5.0"
+      echo -e "${YELLOW}⚠ Could not fetch latest version, using v0.8.1${NC}"
+      VERSION="v0.8.1"
     fi
   fi
 

@@ -20,6 +20,13 @@ export const deleteTool: Tool = {
     if (ctx.editMode === 'dry') {
       return { output: `[DRY RUN] Would delete ${args.path}` };
     }
+    if (ctx.editMode === 'interactive') {
+      const { confirmAction } = await import('../lib/prompt.js');
+      const confirm = await confirmAction(`Delete ${args.path}?`);
+      if (!confirm) {
+        return { output: 'User rejected the delete.' };
+      }
+    }
     await backupFile(filePath);
     await unlink(filePath);
     return { output: `Deleted ${args.path}` };

@@ -9,11 +9,19 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '22']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: npm run package -- --dry-run
+      - run: node dist/index.js --version
+      - run: node dist/index.js --help
+      - run: N0X_HOME="$RUNNER_TEMP/n0x-home" node dist/index.js models
